@@ -3,12 +3,18 @@ import {
   VendaComanda,
   FiltroTipo,
   FiltroStatusResponsavel,
+  FiltroTurno,
   FechamentoTurnoFichas,
   VendaAeB,
   AppTab,
 } from './types/venda';
 import { useLocalStorage } from './hooks/useLocalStorage';
-import { exportToCSV, formatCurrencyBRL } from './utils/formatters';
+import {
+  exportToCSV,
+  formatCurrencyBRL,
+  compareDatesChronologically,
+  matchesTurnoFilter,
+} from './utils/formatters';
 import { generateUniqueId } from './utils/voluxParser';
 import { Header } from './components/Header';
 import { SummaryCards } from './components/SummaryCards';
@@ -115,6 +121,7 @@ export default function App() {
 
   // Filtros de Comandas (Aba 1)
   const [selectedDay, setSelectedDay] = useState<string>('Todos');
+  const [selectedTurno, setSelectedTurno] = useState<FiltroTurno>('Todos os Turnos');
   const [selectedTipo, setSelectedTipo] = useState<FiltroTipo>('Todos');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [statusResponsavel, setStatusResponsavel] = useState<FiltroStatusResponsavel>('todos');
@@ -142,13 +149,8 @@ export default function App() {
   };
 
   const handleVoluxDataLoaded = (extractedVendas: VendaComanda[], sourceName: string) => {
-    // 1. Identifica IDs cancelados no relatório PDF
-    const canceladosIds = new Set<string>(
-      extractedVendas.filter((v) => v.cancelado).map((v) => v.id)
-    );
-
-    // Obtém o conjunto atual para cálculo síncrono e preciso das métricas
-    let currentVendas = vendas;
+    // Obtém o conjunto atual salvo no banco local para sincronização síncrona
+    let currentVendas = [...vendas];
     if (typeof window !== 'undefined') {
       try {
         const raw = window.localStorage.getItem(STORAGE_VENDAS_KEY);
@@ -158,47 +160,175 @@ export default function App() {
       }
     }
 
-    // 2. Se a venda cancelada já existia no banco local, remove-a do sistema
-    let cancelledRemovedCount = 0;
-    const baseVendas = currentVendas.filter((item) => {
-      if (canceladosIds.has(item.id)) {
-        cancelledRemovedCount++;
-        return false;
-      }
-      return true;
-    });
+    const updatedList = [...currentVendas];
+    const matchedLaunchedIndices = new Set<number>();
+    const cancelledInPassIndices = new Set<number>();
+    const newlyAddedIndices = new Set<number>();
 
-    // 3. Varredura com verificação de ID no estado existente (preserva dados como Responsável)
-    const existingIds = new Set<string>(baseVendas.map((item) => item.id));
-    const toAdd: VendaComanda[] = [];
     let addedCount = 0;
+    let updatedCount = 0;
     let addedValor = 0;
-    let ignoredDuplicateCount = 0;
+    let cancelledRemovedCount = 0;
+    let ignoredOrphanCancelCount = 0;
 
-    for (const item of extractedVendas) {
-      if (item.cancelado) {
-        // Se o cancelamento for de venda que ainda não estava no banco, ignora a linha e não adiciona
-        continue;
+    // Separa os registros em "Comandas lançadas" (vendas normais) e "Comandas Canceladas" (estornos)
+    const launchedItems = extractedVendas.filter(
+      (v) => !v.cancelado && v.status !== 'Cancelado' && v.preco >= 0
+    );
+    const cancelledItems = extractedVendas.filter(
+      (v) => Boolean(v.cancelado) || v.status === 'Cancelado' || v.preco < 0
+    );
+
+    // PASSO 1: Processa "Comandas lançadas" (Inserção e Upsert preservando Responsável)
+    for (const rawItem of launchedItems) {
+      const item: VendaComanda = {
+        ...rawItem,
+        preco: Math.abs(rawItem.preco),
+        cancelado: false,
+        status: 'Ativo',
+      };
+
+      // 1. Procura por ID determinístico exato ainda não pareado nesta leitura
+      let matchIdx = updatedList.findIndex(
+        (existing, idx) => !matchedLaunchedIndices.has(idx) && existing.id === item.id
+      );
+
+      // 2. Fallback Update Inteligente (Upsert): mesma Comanda + mesmo Item + mesma Data
+      if (matchIdx === -1) {
+        const targetComanda = (item.comanda || '').trim().toLowerCase();
+        const targetItem = (item.item || '').trim().toLowerCase();
+        if (targetComanda && targetItem) {
+          matchIdx = updatedList.findIndex(
+            (existing, idx) =>
+              !matchedLaunchedIndices.has(idx) &&
+              (existing.comanda || '').trim().toLowerCase() === targetComanda &&
+              (existing.item || '').trim().toLowerCase() === targetItem &&
+              existing.data === item.data
+          );
+        }
       }
 
-      if (existingIds.has(item.id)) {
-        // Se o ID já existir, ignora a adição (anti-duplicação) e mantém os dados antigos
-        ignoredDuplicateCount++;
+      if (matchIdx !== -1) {
+        matchedLaunchedIndices.add(matchIdx);
+        const existingItem = updatedList[matchIdx];
+        const preservedResponsavel =
+          existingItem.responsavel && existingItem.responsavel.trim().length > 0
+            ? existingItem.responsavel
+            : item.responsavel || '';
+
+        updatedList[matchIdx] = {
+          ...existingItem,
+          id: item.id,
+          comanda: item.comanda || existingItem.comanda,
+          data: item.data,
+          hora: item.hora,
+          tipo_venda: item.tipo_venda,
+          item: item.item,
+          preco: item.preco,
+          cancelado: false,
+          status: 'Ativo',
+          responsavel: preservedResponsavel,
+        };
+        updatedCount++;
       } else {
-        // Se o ID não existir, adiciona o novo registro
-        toAdd.push(item);
-        existingIds.add(item.id);
+        const newIndex = updatedList.length;
+        updatedList.push(item);
+        matchedLaunchedIndices.add(newIndex);
+        newlyAddedIndices.add(newIndex);
         addedCount++;
-        addedValor += item.preco;
+        addedValor = Number((addedValor + item.preco).toFixed(2));
       }
     }
 
-    const finalResult = [...baseVendas, ...toAdd];
-    setVendas(finalResult);
+    // PASSO 2: Ação de Estorno ("Comandas Canceladas" ou valores negativos)
+    // Busca no banco local (incluindo vendas recém-lançadas) a venda correspondente por ID determinístico ou Comanda + Item.
+    // Se encontrada: atualiza status para "Cancelado" e força preco para 0.00.
+    // Se NÃO encontrada (vendida num dia não importado): ignora a linha e não a insere na tabela.
+    for (const rawCancel of cancelledItems) {
+      const targetComanda = (rawCancel.comanda || '').trim().toLowerCase();
+      const targetItem = (rawCancel.item || '').trim().toLowerCase();
+
+      // 1. Procura venda ativa com mesmo ID determinístico
+      let matchIdx = updatedList.findIndex(
+        (existing, idx) =>
+          !cancelledInPassIndices.has(idx) &&
+          !existing.cancelado &&
+          existing.status !== 'Cancelado' &&
+          existing.id === rawCancel.id
+      );
+
+      // 2. Procura venda ativa com mesma Comanda + mesmo Item + mesma Data
+      if (matchIdx === -1 && targetComanda && targetItem) {
+        matchIdx = updatedList.findIndex(
+          (existing, idx) =>
+            !cancelledInPassIndices.has(idx) &&
+            !existing.cancelado &&
+            existing.status !== 'Cancelado' &&
+            (existing.comanda || '').trim().toLowerCase() === targetComanda &&
+            (existing.item || '').trim().toLowerCase() === targetItem &&
+            existing.data === rawCancel.data
+        );
+      }
+
+      // 3. Procura venda ativa batendo Comanda + Item (em qualquer data importada no localStorage)
+      if (matchIdx === -1 && targetComanda && targetItem) {
+        matchIdx = updatedList.findIndex(
+          (existing, idx) =>
+            !cancelledInPassIndices.has(idx) &&
+            !existing.cancelado &&
+            existing.status !== 'Cancelado' &&
+            (existing.comanda || '').trim().toLowerCase() === targetComanda &&
+            (existing.item || '').trim().toLowerCase() === targetItem
+        );
+      }
+
+      // 4. Caso de reimportação do mesmo PDF (o item já consta como cancelado no banco local)
+      if (matchIdx === -1 && targetComanda && targetItem) {
+        matchIdx = updatedList.findIndex(
+          (existing, idx) =>
+            !cancelledInPassIndices.has(idx) &&
+            (existing.cancelado || existing.status === 'Cancelado') &&
+            (existing.id === rawCancel.id ||
+              ((existing.comanda || '').trim().toLowerCase() === targetComanda &&
+                (existing.item || '').trim().toLowerCase() === targetItem))
+        );
+      }
+
+      if (matchIdx !== -1) {
+        cancelledInPassIndices.add(matchIdx);
+        const existingItem = updatedList[matchIdx];
+        const wasAlreadyCancelled =
+          Boolean(existingItem.cancelado) || existingItem.status === 'Cancelado';
+        const preservedResponsavel =
+          existingItem.responsavel && existingItem.responsavel.trim().length > 0
+            ? existingItem.responsavel
+            : rawCancel.responsavel || '';
+
+        if (newlyAddedIndices.has(matchIdx) && !wasAlreadyCancelled) {
+          addedValor = Math.max(0, Number((addedValor - existingItem.preco).toFixed(2)));
+        } else if (!newlyAddedIndices.has(matchIdx)) {
+          updatedCount++;
+        }
+
+        updatedList[matchIdx] = {
+          ...existingItem,
+          preco: 0,
+          cancelado: true,
+          status: 'Cancelado',
+          responsavel: preservedResponsavel,
+        };
+        cancelledRemovedCount++;
+      } else {
+        // IMPORTANTE: Venda original não encontrada no banco local -> ignora a linha sem inserir "fantasma negativo"
+        ignoredOrphanCancelCount++;
+      }
+    }
+
+    setVendas(updatedList);
 
     try {
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(STORAGE_VENDAS_KEY, JSON.stringify(finalResult));
+        window.localStorage.setItem(STORAGE_VENDAS_KEY, JSON.stringify(updatedList));
       }
     } catch (err) {
       console.error('Erro ao salvar no localStorage:', err);
@@ -206,27 +336,40 @@ export default function App() {
 
     setLoadedSourceName(sourceName);
 
-    // Feedback visual preciso: baseado exclusivamente nas vendas que foram efetivamente adicionadas ou alteradas
+    // Feedback visual preciso baseado nos itens adicionados, atualizados e estornados
     if (addedCount > 0) {
       const valorStr = formatCurrencyBRL(addedValor);
       let msg = `${addedCount} ${addedCount === 1 ? 'comanda nova importada' : 'comandas novas importadas'} com sucesso (${valorStr}).`;
-      if (ignoredDuplicateCount > 0) {
-        msg += ` ${ignoredDuplicateCount} já existente(s) mantida(s).`;
+      if (updatedCount > 0) {
+        msg += ` ${updatedCount} existente(s) atualizada(s).`;
       }
       if (cancelledRemovedCount > 0) {
-        msg += ` ${cancelledRemovedCount} cancelamento(s) processado(s).`;
+        msg += ` ${cancelledRemovedCount} estorno(s) aplicado(s) com R$ 0,00.`;
+      }
+      if (ignoredOrphanCancelCount > 0) {
+        msg += ` (${ignoredOrphanCancelCount} cancelamento(s) de outro dia ignorado(s)).`;
       }
       showToast(msg);
-    } else if (cancelledRemovedCount > 0) {
-      showToast(`${cancelledRemovedCount} venda(s) cancelada(s) processada(s) e removida(s) do sistema.`);
+    } else if (updatedCount > 0 || cancelledRemovedCount > 0) {
+      let msg = `${updatedCount} ${updatedCount === 1 ? 'comanda existente atualizada' : 'comandas existentes atualizadas'} com sucesso.`;
+      if (cancelledRemovedCount > 0) {
+        msg += ` ${cancelledRemovedCount} estorno(s) marcado(s) como Cancelado (R$ 0,00).`;
+      }
+      showToast(msg);
     } else {
-      showToast(`Nenhuma comanda nova: todas as ${ignoredDuplicateCount || extractedVendas.length} comandas do PDF já constavam no sistema.`);
+      showToast('Relatório sincronizado com sucesso.');
     }
 
-    return { addedCount, addedValor, ignoredDuplicateCount, cancelledRemovedCount };
+    return {
+      addedCount,
+      updatedCount,
+      addedValor,
+      ignoredDuplicateCount: updatedCount,
+      cancelledRemovedCount,
+    };
   };
 
-  // Extração automática de dias únicos disponíveis nas comandas salvas
+  // Extração automática de dias únicos disponíveis nas comandas salvas (Ordenação Cronológica Real: mês -> dia)
   const availableDays = useMemo(() => {
     const daysSet = new Set<string>();
     vendas.forEach((v) => {
@@ -234,7 +377,7 @@ export default function App() {
         daysSet.add(v.data.trim());
       }
     });
-    return Array.from(daysSet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return Array.from(daysSet).sort(compareDatesChronologically);
   }, [vendas]);
 
   // Operadores conhecidos para sugestões rápidas em todo o sistema
@@ -264,21 +407,27 @@ export default function App() {
 
   const hasActiveFilters =
     selectedDay !== 'Todos' ||
+    selectedTurno !== 'Todos os Turnos' ||
     selectedTipo !== 'Todos' ||
     statusResponsavel !== 'todos' ||
     searchTerm.trim() !== '';
 
   const handleClearFilters = () => {
     setSelectedDay('Todos');
+    setSelectedTurno('Todos os Turnos');
     setSelectedTipo('Todos');
     setStatusResponsavel('todos');
     setSearchTerm('');
   };
 
-  // Comandas filtradas (Aba 1)
+  // Comandas filtradas (Aba 1) - Filtros cumulativos (Data + Turno + Tipo + Responsável + Busca)
   const filteredVendas = useMemo(() => {
     return vendas.filter((venda) => {
       if (selectedDay !== 'Todos' && venda.data !== selectedDay) {
+        return false;
+      }
+
+      if (!matchesTurnoFilter(venda.hora, selectedTurno)) {
         return false;
       }
 
@@ -308,7 +457,7 @@ export default function App() {
 
       return true;
     });
-  }, [vendas, selectedDay, selectedTipo, statusResponsavel, searchTerm]);
+  }, [vendas, selectedDay, selectedTurno, selectedTipo, statusResponsavel, searchTerm]);
 
   // Handlers de Comandas (Aba 1)
   const handleUpdateResponsavel = (id: string, responsavel: string) => {
@@ -355,6 +504,36 @@ export default function App() {
         ? `Comanda #${itemToDelete.comanda || itemToDelete.id} (${itemToDelete.item}) excluída.`
         : 'Comanda excluída com sucesso.'
     );
+  };
+
+  // Exclusão em Massa apenas dos itens visíveis no filtro atual (Comandas)
+  const handleDeleteFilteredVendas = () => {
+    if (filteredVendas.length === 0) return;
+
+    if (
+      window.confirm(
+        'Tem certeza que deseja excluir TODAS as vendas exibidas neste filtro? Essa ação não pode ser desfeita.'
+      )
+    ) {
+      const idsToRemove = new Set(filteredVendas.map((v) => v.id));
+      const removedCount = idsToRemove.size;
+
+      setVendas((prev) => {
+        const updated = prev.filter((item) => !idsToRemove.has(item.id));
+        try {
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem(STORAGE_VENDAS_KEY, JSON.stringify(updated));
+          }
+        } catch (err) {
+          console.error('Erro ao salvar no localStorage após exclusão filtrada:', err);
+        }
+        return updated;
+      });
+
+      showToast(
+        `${removedCount} ${removedCount === 1 ? 'venda filtrada excluída' : 'vendas filtradas excluídas'} com sucesso.`
+      );
+    }
   };
 
   const handleClearAllData = () => {
@@ -446,13 +625,8 @@ export default function App() {
   };
 
   // Handlers de Alimentos e Bebidas - AeB (Aba 3)
-  const handleAeBDataLoaded = (extracted: VendaAeB[], sourceName: string) => {
-    // 1. Identifica cancelamentos
-    const canceladosIds = new Set<string>(
-      extracted.filter((v) => v.cancelado).map((v) => v.id)
-    );
-
-    let currentAeb = aebSales;
+  const handleAeBDataLoaded = (extracted: VendaAeB[], _sourceName: string) => {
+    let currentAeb = [...aebSales];
     if (typeof window !== 'undefined') {
       try {
         const raw = window.localStorage.getItem(STORAGE_AEB_KEY);
@@ -462,66 +636,209 @@ export default function App() {
       }
     }
 
-    let cancelledRemovedCount = 0;
-    const baseAeb = currentAeb.filter((item) => {
-      if (canceladosIds.has(item.id)) {
-        cancelledRemovedCount++;
-        return false;
-      }
-      return true;
-    });
+    const updatedList = [...currentAeb];
+    const matchedLaunchedIndices = new Set<number>();
+    const cancelledInPassIndices = new Set<number>();
+    const newlyAddedIndices = new Set<number>();
 
-    const existingIds = new Set<string>(baseAeb.map((item) => item.id));
-    const toAdd: VendaAeB[] = [];
     let addedCount = 0;
+    let updatedCount = 0;
     let addedValor = 0;
-    let ignoredDuplicateCount = 0;
+    let cancelledRemovedCount = 0;
+    let ignoredOrphanCancelCount = 0;
 
-    for (const item of extracted) {
-      if (item.cancelado) {
-        continue;
+    // Separa os registros em "Comandas lançadas" (vendas normais) e "Comandas Canceladas" (estornos)
+    const launchedItems = extracted.filter(
+      (v) => !v.cancelado && v.status !== 'Cancelado' && v.preco >= 0
+    );
+    const cancelledItems = extracted.filter(
+      (v) => Boolean(v.cancelado) || v.status === 'Cancelado' || v.preco < 0
+    );
+
+    // PASSO 1: Processa "Comandas lançadas" (Inserção e Upsert preservando Responsável)
+    for (const rawItem of launchedItems) {
+      const item: VendaAeB = {
+        ...rawItem,
+        preco: Math.abs(rawItem.preco),
+        cancelado: false,
+        status: 'Ativo',
+      };
+
+      // 1. Procura por ID determinístico exato ainda não pareado nesta leitura
+      let matchIdx = updatedList.findIndex(
+        (existing, idx) => !matchedLaunchedIndices.has(idx) && existing.id === item.id
+      );
+
+      // 2. Fallback Update Inteligente (Upsert): mesma Comanda + mesmo Nome na mesma data
+      if (matchIdx === -1) {
+        const targetComanda = (item.comanda || '').trim().toLowerCase();
+        const targetItem = (item.item || '').trim().toLowerCase();
+        if (targetComanda && targetItem) {
+          matchIdx = updatedList.findIndex(
+            (existing, idx) =>
+              !matchedLaunchedIndices.has(idx) &&
+              (existing.comanda || '').trim().toLowerCase() === targetComanda &&
+              (existing.item || '').trim().toLowerCase() === targetItem &&
+              existing.data === item.data
+          );
+        }
       }
 
-      if (existingIds.has(item.id)) {
-        // Previne duplicação e preserva o registro antigo
-        ignoredDuplicateCount++;
+      if (matchIdx !== -1) {
+        matchedLaunchedIndices.add(matchIdx);
+        const existingItem = updatedList[matchIdx];
+        const preservedResponsavel =
+          existingItem.responsavel && existingItem.responsavel.trim().length > 0
+            ? existingItem.responsavel
+            : item.responsavel || '';
+
+        updatedList[matchIdx] = {
+          ...existingItem,
+          id: item.id,
+          comanda: item.comanda || existingItem.comanda,
+          data: item.data,
+          hora: item.hora,
+          item: item.item,
+          preco: item.preco,
+          cancelado: false,
+          status: 'Ativo',
+          responsavel: preservedResponsavel,
+        };
+        updatedCount++;
       } else {
-        toAdd.push(item);
-        existingIds.add(item.id);
+        const newIndex = updatedList.length;
+        updatedList.push(item);
+        matchedLaunchedIndices.add(newIndex);
+        newlyAddedIndices.add(newIndex);
         addedCount++;
-        addedValor += item.preco;
+        addedValor = Number((addedValor + item.preco).toFixed(2));
       }
     }
 
-    const finalResult = [...baseAeb, ...toAdd];
-    setAebSales(finalResult);
+    // PASSO 2: Ação de Estorno ("Comandas Canceladas" ou valores negativos)
+    // Busca no banco local (incluindo vendas recém-lançadas) a venda correspondente por ID determinístico ou Comanda + Item.
+    // Se encontrada: atualiza status para "Cancelado" e força preco para 0.00.
+    // Se NÃO encontrada (vendida num dia não importado): ignora a linha e não a insere na tabela.
+    for (const rawCancel of cancelledItems) {
+      const targetComanda = (rawCancel.comanda || '').trim().toLowerCase();
+      const targetItem = (rawCancel.item || '').trim().toLowerCase();
+
+      // 1. Procura venda ativa com mesmo ID determinístico
+      let matchIdx = updatedList.findIndex(
+        (existing, idx) =>
+          !cancelledInPassIndices.has(idx) &&
+          !existing.cancelado &&
+          existing.status !== 'Cancelado' &&
+          existing.id === rawCancel.id
+      );
+
+      // 2. Procura venda ativa com mesma Comanda + mesmo Item + mesma Data
+      if (matchIdx === -1 && targetComanda && targetItem) {
+        matchIdx = updatedList.findIndex(
+          (existing, idx) =>
+            !cancelledInPassIndices.has(idx) &&
+            !existing.cancelado &&
+            existing.status !== 'Cancelado' &&
+            (existing.comanda || '').trim().toLowerCase() === targetComanda &&
+            (existing.item || '').trim().toLowerCase() === targetItem &&
+            existing.data === rawCancel.data
+        );
+      }
+
+      // 3. Procura venda ativa batendo Comanda + Item (em qualquer data importada no localStorage)
+      if (matchIdx === -1 && targetComanda && targetItem) {
+        matchIdx = updatedList.findIndex(
+          (existing, idx) =>
+            !cancelledInPassIndices.has(idx) &&
+            !existing.cancelado &&
+            existing.status !== 'Cancelado' &&
+            (existing.comanda || '').trim().toLowerCase() === targetComanda &&
+            (existing.item || '').trim().toLowerCase() === targetItem
+        );
+      }
+
+      // 4. Caso de reimportação do mesmo PDF (o item já consta como cancelado no banco local)
+      if (matchIdx === -1 && targetComanda && targetItem) {
+        matchIdx = updatedList.findIndex(
+          (existing, idx) =>
+            !cancelledInPassIndices.has(idx) &&
+            (existing.cancelado || existing.status === 'Cancelado') &&
+            (existing.id === rawCancel.id ||
+              ((existing.comanda || '').trim().toLowerCase() === targetComanda &&
+                (existing.item || '').trim().toLowerCase() === targetItem))
+        );
+      }
+
+      if (matchIdx !== -1) {
+        cancelledInPassIndices.add(matchIdx);
+        const existingItem = updatedList[matchIdx];
+        const wasAlreadyCancelled =
+          Boolean(existingItem.cancelado) || existingItem.status === 'Cancelado';
+        const preservedResponsavel =
+          existingItem.responsavel && existingItem.responsavel.trim().length > 0
+            ? existingItem.responsavel
+            : rawCancel.responsavel || '';
+
+        if (newlyAddedIndices.has(matchIdx) && !wasAlreadyCancelled) {
+          addedValor = Math.max(0, Number((addedValor - existingItem.preco).toFixed(2)));
+        } else if (!newlyAddedIndices.has(matchIdx)) {
+          updatedCount++;
+        }
+
+        updatedList[matchIdx] = {
+          ...existingItem,
+          preco: 0,
+          cancelado: true,
+          status: 'Cancelado',
+          responsavel: preservedResponsavel,
+        };
+        cancelledRemovedCount++;
+      } else {
+        // IMPORTANTE: Venda original não encontrada no banco local -> ignora a linha sem inserir "fantasma negativo"
+        ignoredOrphanCancelCount++;
+      }
+    }
+
+    setAebSales(updatedList);
 
     try {
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(STORAGE_AEB_KEY, JSON.stringify(finalResult));
+        window.localStorage.setItem(STORAGE_AEB_KEY, JSON.stringify(updatedList));
       }
     } catch (err) {
       console.error('Erro ao salvar AeB no localStorage:', err);
     }
 
-    // Feedback visual preciso: baseado exclusivamente nas vendas que foram efetivamente adicionadas ou alteradas
     if (addedCount > 0) {
       const valorStr = formatCurrencyBRL(addedValor);
       let msg = `${addedCount} ${addedCount === 1 ? 'item novo de AeB importado' : 'itens novos de AeB importados'} com sucesso (${valorStr}).`;
-      if (ignoredDuplicateCount > 0) {
-        msg += ` (${ignoredDuplicateCount} já existente(s) mantido(s)).`;
+      if (updatedCount > 0) {
+        msg += ` (${updatedCount} existente(s) atualizado(s)).`;
       }
       if (cancelledRemovedCount > 0) {
-        msg += ` (${cancelledRemovedCount} cancelamento(s) processado(s)).`;
+        msg += ` (${cancelledRemovedCount} estorno(s) aplicado(s) com R$ 0,00).`;
+      }
+      if (ignoredOrphanCancelCount > 0) {
+        msg += ` (${ignoredOrphanCancelCount} cancelamento(s) de outro dia ignorado(s)).`;
       }
       showToast(msg);
-    } else if (cancelledRemovedCount > 0) {
-      showToast(`${cancelledRemovedCount} item(ns) de AeB cancelado(s) removido(s) do sistema.`);
+    } else if (updatedCount > 0 || cancelledRemovedCount > 0) {
+      let msg = `${updatedCount} ${updatedCount === 1 ? 'item existente de AeB atualizado' : 'itens existentes de AeB atualizados'} com sucesso.`;
+      if (cancelledRemovedCount > 0) {
+        msg += ` (${cancelledRemovedCount} estorno(s) marcado(s) como Cancelado R$ 0,00).`;
+      }
+      showToast(msg);
     } else {
-      showToast(`Nenhum item novo: todos os ${ignoredDuplicateCount || extracted.length} itens de AeB do PDF já constavam no sistema.`);
+      showToast('Relatório de AeB sincronizado com sucesso.');
     }
 
-    return { addedCount, addedValor, ignoredDuplicateCount, cancelledRemovedCount };
+    return {
+      addedCount,
+      updatedCount,
+      addedValor,
+      ignoredDuplicateCount: updatedCount,
+      cancelledRemovedCount,
+    };
   };
 
   const handleUpdateAeBResponsavel = (id: string, responsavel: string) => {
@@ -565,6 +882,35 @@ export default function App() {
         ? `Item "${itemToDelete.item}" excluído com sucesso.`
         : 'Venda de Alimentos e Bebidas (AeB) excluída com sucesso.'
     );
+  };
+
+  const handleDeleteFilteredAeBSales = (filteredIds: string[]) => {
+    if (filteredIds.length === 0) return;
+
+    if (
+      window.confirm(
+        'Tem certeza que deseja excluir TODAS as vendas exibidas neste filtro? Essa ação não pode ser desfeita.'
+      )
+    ) {
+      const idsToRemove = new Set(filteredIds);
+      const removedCount = idsToRemove.size;
+
+      setAebSales((prev) => {
+        const updated = prev.filter((item) => !idsToRemove.has(item.id));
+        try {
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem(STORAGE_AEB_KEY, JSON.stringify(updated));
+          }
+        } catch (err) {
+          console.error('Erro ao salvar AeB no localStorage após exclusão filtrada:', err);
+        }
+        return updated;
+      });
+
+      showToast(
+        `${removedCount} ${removedCount === 1 ? 'venda filtrada de AeB excluída' : 'vendas filtradas de AeB excluídas'} com sucesso.`
+      );
+    }
   };
 
   const handleExportAeBCSV = () => {
@@ -628,6 +974,49 @@ export default function App() {
     );
   };
 
+  // Importação direta de Backup JSON (Sincronização Manual entre PC e Celular)
+  const handleDirectImportBackupJSON = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+
+        let restoredVendas: VendaComanda[] = [];
+        let restoredFechamentos: FechamentoTurnoFichas[] = [];
+        let restoredAeB: VendaAeB[] = [];
+
+        if (Array.isArray(parsed)) {
+          // Arquivo contém array direto de comandas
+          restoredVendas = parsed;
+        } else if (parsed && typeof parsed === 'object') {
+          if (Array.isArray(parsed.vendas)) {
+            restoredVendas = parsed.vendas;
+          }
+          if (Array.isArray(parsed.fechamentos)) {
+            restoredFechamentos = parsed.fechamentos;
+          }
+          if (Array.isArray(parsed.aebSales)) {
+            restoredAeB = parsed.aebSales;
+          }
+        }
+
+        if (
+          restoredVendas.length === 0 &&
+          restoredFechamentos.length === 0 &&
+          restoredAeB.length === 0
+        ) {
+          throw new Error('O arquivo JSON não possui comandas, bebidas ou fechamentos válidos.');
+        }
+
+        handleRestoreBackup(restoredVendas, restoredFechamentos, restoredAeB);
+      } catch (err: any) {
+        alert(err.message || 'Arquivo de backup inválido. Certifique-se de selecionar um JSON gerado pelo sistema.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="min-h-screen bg-neutral-50/70 text-neutral-900 pb-16">
       {/* Top Header com Navegação em Abas */}
@@ -642,6 +1031,7 @@ export default function App() {
         onOpenNewAeBSaleModal={() => setIsNewAeBSaleOpen(true)}
         onExportCSV={handleExportCSV}
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
+        onImportBackupJSON={handleDirectImportBackupJSON}
         onClearAllData={handleClearAllData}
       />
 
@@ -693,6 +1083,8 @@ export default function App() {
                 availableDays={availableDays}
                 selectedDay={selectedDay}
                 onSelectDay={setSelectedDay}
+                selectedTurno={selectedTurno}
+                onSelectTurno={setSelectedTurno}
                 selectedTipo={selectedTipo}
                 onSelectTipo={setSelectedTipo}
                 searchTerm={searchTerm}
@@ -706,6 +1098,8 @@ export default function App() {
                 onOpenQuickAssign={() => setIsQuickAssignOpen(true)}
                 pendingAssignCount={pendingAssignCount}
                 onOpenBackupModal={() => setIsBackupModalOpen(true)}
+                onImportBackupJSON={handleDirectImportBackupJSON}
+                onDeleteFilteredVendas={handleDeleteFilteredVendas}
               />
 
               <SalesTable
@@ -731,6 +1125,7 @@ export default function App() {
             onUpdateResponsavel={handleUpdateAeBResponsavel}
             onEditVenda={handleEditAeBSale}
             onDeleteVenda={handleDeleteAeBSale}
+            onDeleteFilteredVendas={handleDeleteFilteredAeBSales}
             onDataLoaded={handleAeBDataLoaded}
             onOpenNewSaleModal={() => setIsNewAeBSaleOpen(true)}
             onExportCSV={handleExportAeBCSV}

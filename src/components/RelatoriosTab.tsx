@@ -100,11 +100,15 @@ export const RelatoriosTab: React.FC<RelatoriosTabProps> = ({
 
   // Filtragem dos dados (exclui itens cancelados e aplica o filtro de período)
   const filteredVendas = useMemo(() => {
-    return vendas.filter((v) => !v.cancelado && matchesPeriod(v.data));
+    return vendas.filter(
+      (v) => !v.cancelado && v.status !== 'Cancelado' && matchesPeriod(v.data)
+    );
   }, [vendas, selectedPeriod]);
 
   const filteredAeb = useMemo(() => {
-    return aebSales.filter((a) => !a.cancelado && matchesPeriod(a.data));
+    return aebSales.filter(
+      (a) => !a.cancelado && a.status !== 'Cancelado' && matchesPeriod(a.data)
+    );
   }, [aebSales, selectedPeriod]);
 
   // Total combinado de faturamento no período

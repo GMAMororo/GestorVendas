@@ -12,7 +12,8 @@ import {
 } from 'lucide-react';
 import {
   extractTextFromPdf,
-  parseVoluxAeBText,
+  parseVoluxAeBTextWithReconciliation,
+  VoluxAeBReconciliationResult,
   SAMPLE_VOLUX_AEB_REPORT_TEXT,
 } from '../utils/voluxParser';
 import { VendaAeB } from '../types/venda';
@@ -20,6 +21,7 @@ import { formatCurrencyBRL } from '../utils/formatters';
 
 interface ImportResult {
   addedCount: number;
+  updatedCount?: number;
   addedValor: number;
   ignoredDuplicateCount: number;
   cancelledRemovedCount: number;
@@ -32,14 +34,19 @@ interface AeBUploadAreaProps {
 
 export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
   onDataLoaded,
-  currentLoadedSource,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [discrepancyAlert, setDiscrepancyAlert] = useState<{
+    sourceName: string;
+    reconciliation: VoluxAeBReconciliationResult;
+    formattedMessage: string;
+  } | null>(null);
   const [successInfo, setSuccessInfo] = useState<{
     fileName: string;
     totalItens: number;
+    updatedItens?: number;
     totalValor: number;
     totalLido?: number;
     ignoredCount?: number;
@@ -49,9 +56,41 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const commitValidatedData = (
+    reconciliation: VoluxAeBReconciliationResult,
+    sourceName: string
+  ) => {
+    const parsed = reconciliation.vendas;
+    const result = onDataLoaded(parsed, sourceName);
+
+    if (result) {
+      setSuccessInfo({
+        fileName: sourceName,
+        totalItens: result.addedCount,
+        updatedItens: result.updatedCount || 0,
+        totalValor: result.addedValor,
+        totalLido: parsed.length,
+        ignoredCount: result.ignoredDuplicateCount,
+      });
+    } else {
+      const totalSoma = parsed.reduce((acc, curr) => acc + curr.preco, 0);
+      setSuccessInfo({
+        fileName: sourceName,
+        totalItens: parsed.length,
+        updatedItens: 0,
+        totalValor: totalSoma,
+        totalLido: parsed.length,
+      });
+    }
+    setErrorMessage(null);
+    setDiscrepancyAlert(null);
+  };
+
   const processTextAndEmit = (rawText: string, sourceName: string) => {
     try {
-      const parsed = parseVoluxAeBText(rawText);
+      const reconciliation = parseVoluxAeBTextWithReconciliation(rawText);
+      const parsed = reconciliation.vendas;
+
       if (parsed.length === 0) {
         setErrorMessage(
           'Não foi possível encontrar itens de Alimentos e Bebidas (AeB) no documento. Verifique se o arquivo contém comandas e itens válidos.'
@@ -59,27 +98,40 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
         return;
       }
 
-      // Envia os dados para a tabela de AeB e obtém resultado efetivo do Upsert
-      const result = onDataLoaded(parsed, sourceName);
+      // TRAVA DE SEGURANÇA (Conciliação e Auditoria):
+      // Validação: if (totalExtraido !== totalEsperado)
+      if (
+        reconciliation.totalEsperado !== null &&
+        reconciliation.totalExtraido !== reconciliation.totalEsperado &&
+        reconciliation.hasDiscrepancy
+      ) {
+        const valorEsperadoFmt = reconciliation.totalEsperado.toLocaleString('pt-BR', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        const valorExtraidoFmt = reconciliation.totalExtraido.toLocaleString('pt-BR', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        const diferencaFmt = reconciliation.diferenca.toLocaleString('pt-BR', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
 
-      if (result) {
-        setSuccessInfo({
-          fileName: sourceName,
-          totalItens: result.addedCount,
-          totalValor: result.addedValor,
-          totalLido: parsed.length,
-          ignoredCount: result.ignoredDuplicateCount,
+        const alertMsg = `Atenção: Discrepância na Leitura! O relatório indica um total de R$ ${valorEsperadoFmt}, mas o sistema identificou apenas R$ ${valorExtraidoFmt}. Faltam R$ ${diferencaFmt}.`;
+
+        setSuccessInfo(null);
+        setErrorMessage(alertMsg);
+        setDiscrepancyAlert({
+          sourceName,
+          reconciliation,
+          formattedMessage: alertMsg,
         });
-      } else {
-        const totalSoma = parsed.reduce((acc, curr) => acc + curr.preco, 0);
-        setSuccessInfo({
-          fileName: sourceName,
-          totalItens: parsed.length,
-          totalValor: totalSoma,
-          totalLido: parsed.length,
-        });
+        return;
       }
-      setErrorMessage(null);
+
+      // Sem discrepância: envia os dados validados para a tabela de AeB e obtém resultado efetivo do Upsert
+      commitValidatedData(reconciliation, sourceName);
     } catch (err: any) {
       console.error('Erro ao processar relatório AeB:', err);
       setErrorMessage(
@@ -202,14 +254,20 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
                   <span className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200/70 px-2 py-0.5 rounded">
                     <CheckCircle className="w-3 h-3" />
                     {successInfo.totalItens > 0
-                      ? `${successInfo.totalItens} ${successInfo.totalItens === 1 ? 'item novo importado' : 'itens novos importados'} com sucesso (${formatCurrencyBRL(successInfo.totalValor)})`
+                      ? `${successInfo.totalItens} ${successInfo.totalItens === 1 ? 'item novo importado' : 'itens novos importados'} com sucesso (${formatCurrencyBRL(successInfo.totalValor)})${
+                          successInfo.updatedItens && successInfo.updatedItens > 0
+                            ? ` · ${successInfo.updatedItens} atualizado(s)`
+                            : ''
+                        }`
+                      : successInfo.updatedItens && successInfo.updatedItens > 0
+                      ? `${successInfo.updatedItens} ${successInfo.updatedItens === 1 ? 'item existente sincronizado/atualizado' : 'itens existentes sincronizados/atualizados'} com sucesso`
                       : `Todos os itens de AeB já constavam no sistema (0 novos inseridos)`}
                   </span>
                 )}
               </div>
 
               <p className="text-xs text-neutral-500">
-                Arraste o relatório PDF de alimentos e bebidas ou utilize o botão para extrair as comandas e valores com preço imutável.
+                Arraste o relatório PDF de alimentos e bebidas ou utilize o botão para extrair as comandas, quantidades (Qtde) e conciliação de valores.
               </p>
             </div>
           </div>
@@ -262,25 +320,153 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
         </div>
 
         {errorMessage && (
-          <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2.5 text-xs text-red-700">
-            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-            <span className="flex-1">{errorMessage}</span>
-            <button
-              type="button"
-              onClick={() => setErrorMessage(null)}
-              className="text-red-500 hover:text-red-800 p-0.5 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+          <div className="mt-3 p-3.5 bg-red-50 border border-red-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-red-800">
+            <div className="flex items-start sm:items-center gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5 sm:mt-0" />
+              <span className="font-semibold leading-relaxed">{errorMessage}</span>
+            </div>
+            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+              {discrepancyAlert && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    commitValidatedData(
+                      discrepancyAlert.reconciliation,
+                      discrepancyAlert.sourceName
+                    )
+                  }
+                  className="px-2.5 py-1 text-[11px] font-semibold text-red-800 bg-red-100 hover:bg-red-200 rounded border border-red-300 transition-colors cursor-pointer"
+                >
+                  Importar Mesmo Assim
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setErrorMessage(null);
+                  setDiscrepancyAlert(null);
+                }}
+                className="text-red-500 hover:text-red-800 p-0.5 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </div>
 
+      {/* Modal de Alerta Visual de Discrepância na Conciliação AeB */}
+      {discrepancyAlert && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/50 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+          <div
+            className="bg-white rounded-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-2xl border border-red-200 shadow-xl animate-in fade-in zoom-in-95 duration-150"
+            role="alertdialog"
+            aria-modal="true"
+          >
+            <div className="px-5 py-4 bg-red-50 border-b border-red-200 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-lg bg-red-100 text-red-700 flex items-center justify-center shrink-0 border border-red-200">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-red-950">
+                    Trava de Conciliação Financeira (AeB) · Discrepância Detectada
+                  </h3>
+                  <p className="text-xs text-red-700 mt-0.5">
+                    O salvamento automático foi bloqueado para evitar divergência no fechamento do caixa
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDiscrepancyAlert(null)}
+                className="text-red-500 hover:text-red-800 p-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+              <div className="p-4 rounded-lg bg-red-50/90 border border-red-200 text-red-950 font-semibold text-xs sm:text-sm leading-relaxed">
+                {discrepancyAlert.formattedMessage}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3 rounded-lg bg-neutral-50 border border-neutral-200">
+                  <span className="text-[11px] text-neutral-500 block">Total Esperado (PDF)</span>
+                  <span className="text-base font-bold text-neutral-900 font-mono-tabular">
+                    {formatCurrencyBRL(discrepancyAlert.reconciliation.totalEsperado || 0)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-lg bg-neutral-50 border border-neutral-200">
+                  <span className="text-[11px] text-neutral-500 block">
+                    Total Extraído ({discrepancyAlert.reconciliation.vendas.length} itens)
+                  </span>
+                  <span className="text-base font-bold text-amber-700 font-mono-tabular">
+                    {formatCurrencyBRL(discrepancyAlert.reconciliation.totalExtraido)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200">
+                  <span className="text-[11px] text-red-700 block">Diferença Encontrada</span>
+                  <span className="text-base font-bold text-red-700 font-mono-tabular">
+                    {formatCurrencyBRL(discrepancyAlert.reconciliation.diferenca)}
+                  </span>
+                </div>
+              </div>
+
+              {discrepancyAlert.reconciliation.unmatchedLines.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="font-semibold text-neutral-900">
+                    Linhas com valores não reconhecidas pelo parser ({discrepancyAlert.reconciliation.unmatchedLines.length}):
+                  </div>
+                  <div className="p-3 rounded-lg bg-neutral-900 text-amber-300 font-mono-tabular text-[11px] space-y-1 max-h-36 overflow-y-auto">
+                    {discrepancyAlert.reconciliation.unmatchedLines.map((line, idx) => (
+                      <div key={idx}>{line}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="p-3 rounded-lg bg-neutral-100 border border-neutral-200 text-neutral-700">
+                <strong>Auditoria Técnica (Console.log):</strong> A lista detalhada de todas as{' '}
+                {discrepancyAlert.reconciliation.vendas.length} comandas e itens de AeB extraídos foi impressa no{' '}
+                <code className="px-1.5 py-0.5 bg-white rounded border border-neutral-300 text-neutral-900">
+                  console.log
+                </code>{' '}
+                do navegador para conferência linha a linha com o PDF físico.
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-neutral-200 bg-neutral-50 flex flex-wrap items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setDiscrepancyAlert(null)}
+                className="px-4 py-2 text-xs font-semibold text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer"
+              >
+                Cancelar e Revisar PDF
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  commitValidatedData(
+                    discrepancyAlert.reconciliation,
+                    discrepancyAlert.sourceName
+                  )
+                }
+                className="px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors cursor-pointer"
+              >
+                Salvar Mesmo Assim ({discrepancyAlert.reconciliation.vendas.length} itens)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Colar Texto AeB */}
       {showPasteModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
           <div
-            className="bg-white rounded-xl max-w-lg w-full border border-neutral-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            className="bg-white rounded-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-lg border border-neutral-200 shadow-xl animate-in fade-in zoom-in-95 duration-150"
             role="dialog"
             aria-modal="true"
           >

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import {
   FileSpreadsheet,
   Plus,
@@ -7,6 +7,7 @@ import {
   Ticket,
   GlassWater,
   BarChart3,
+  Upload,
 } from 'lucide-react';
 import { AppTab } from '../types/venda';
 
@@ -21,6 +22,7 @@ interface HeaderProps {
   onOpenNewAeBSaleModal?: () => void;
   onExportCSV: () => void;
   onOpenBackupModal: () => void;
+  onImportBackupJSON?: (file: File) => void;
   onClearAllData: () => void;
 }
 
@@ -35,13 +37,16 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenNewAeBSaleModal,
   onExportCSV,
   onOpenBackupModal,
+  onImportBackupJSON,
   onClearAllData,
 }) => {
+  const headerFileInputRef = useRef<HTMLInputElement>(null);
+
   return (
     <header className="border-b border-neutral-200/80 bg-white sticky top-0 z-30 shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Top Bar Row */}
-        <div className="flex items-center justify-between h-16 gap-4">
+        {/* Top Bar Row - Responsivo para telas pequenas */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between min-h-16 py-2.5 sm:py-0 gap-3">
           {/* Brand & Title */}
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-neutral-900 text-white flex items-center justify-center font-bold text-sm tracking-tight shadow-sm shrink-0">
@@ -63,17 +68,45 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Quick Actions */}
-          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Backup Button (JSON/CSV) */}
             <button
               type="button"
               onClick={onOpenBackupModal}
               title="Exportar ou restaurar cópia de segurança dos dados"
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-50 hover:text-neutral-900 active:bg-neutral-100 transition-colors cursor-pointer shadow-2xs"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs font-medium text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-50 hover:text-neutral-900 active:bg-neutral-100 transition-colors cursor-pointer shadow-2xs whitespace-nowrap"
             >
               <RotateCcw className="w-3.5 h-3.5 text-neutral-500" />
-              <span>Backup (JSON/CSV)</span>
+              <span>Backup</span>
             </button>
+
+            {/* Importar Backup (Sincronização Manual entre PC e Celular) */}
+            {onImportBackupJSON && (
+              <>
+                <input
+                  ref={headerFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      onImportBackupJSON(file);
+                      e.target.value = '';
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => headerFileInputRef.current?.click()}
+                  title="Importar arquivo JSON de backup para sincronizar este dispositivo"
+                  className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer shadow-2xs whitespace-nowrap"
+                >
+                  <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Importar</span>
+                </button>
+              </>
+            )}
 
             {activeTab === 'comandas' && (
               <>
@@ -91,7 +124,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   type="button"
                   onClick={onOpenNewSaleModal}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 active:bg-neutral-950 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 sm:py-2 text-xs font-medium text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 active:bg-neutral-950 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Nova Venda</span>
@@ -102,7 +135,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={onOpenNewAeBSaleModal}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 sm:py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Nova Venda (AeB)</span>
@@ -111,13 +144,13 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* 1. Sistema de Abas (Navegação Principal) */}
-        <div className="flex items-center gap-1 border-t border-neutral-100 pt-1 -mb-px overflow-x-auto no-scrollbar">
+        {/* 1. Sistema de Abas (Navegação Principal) - Rolável horizontalmente no mobile */}
+        <div className="flex items-center gap-1 border-t border-neutral-100 pt-1 -mb-px overflow-x-auto whitespace-nowrap no-scrollbar scroll-smooth w-full">
           {/* Aba 1: Comandas & Vendas */}
           <button
             type="button"
             onClick={() => onTabChange('comandas')}
-            className={`flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer shrink-0 ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
               activeTab === 'comandas'
                 ? 'border-neutral-900 text-neutral-900'
                 : 'border-transparent text-neutral-500 hover:text-neutral-800 hover:border-neutral-300'
@@ -174,7 +207,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             type="button"
             onClick={() => onTabChange('relatorios')}
-            className={`flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer shrink-0 ${
+            className={`flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
               activeTab === 'relatorios'
                 ? 'border-purple-600 text-purple-900'
                 : 'border-transparent text-neutral-500 hover:text-neutral-800 hover:border-neutral-300'

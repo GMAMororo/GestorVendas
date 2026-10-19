@@ -27,7 +27,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
   ).length;
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
       {/* Card 1: Total Arrecadado */}
       <div className="bg-white border border-neutral-200/90 rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:border-neutral-300 transition-colors">
         <div className="flex items-center justify-between mb-3">

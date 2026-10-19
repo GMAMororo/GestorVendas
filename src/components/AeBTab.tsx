@@ -3,20 +3,26 @@ import {
   GlassWater,
   DollarSign,
   Calendar,
+  Clock,
   Search,
   X,
   Plus,
   FileSpreadsheet,
   TrendingUp,
-  Info,
+  Trash2,
 } from 'lucide-react';
-import { VendaAeB } from '../types/venda';
-import { formatCurrencyBRL } from '../utils/formatters';
+import { VendaAeB, FiltroTurno, FILTRO_TURNO_OPCOES } from '../types/venda';
+import {
+  formatCurrencyBRL,
+  compareDatesChronologically,
+  matchesTurnoFilter,
+} from '../utils/formatters';
 import { AeBUploadArea } from './AeBUploadArea';
 import { AeBTable } from './AeBTable';
 
 interface ImportResult {
   addedCount: number;
+  updatedCount?: number;
   addedValor: number;
   ignoredDuplicateCount: number;
   cancelledRemovedCount: number;
@@ -27,6 +33,7 @@ interface AeBTabProps {
   onUpdateResponsavel: (id: string, responsavel: string) => void;
   onEditVenda: (venda: VendaAeB) => void;
   onDeleteVenda: (id: string) => void;
+  onDeleteFilteredVendas?: (filteredIds: string[]) => void;
   onDataLoaded: (novas: VendaAeB[], sourceName: string) => ImportResult | void;
   onOpenNewSaleModal: () => void;
   onExportCSV: () => void;
@@ -37,14 +44,16 @@ export const AeBTab: React.FC<AeBTabProps> = ({
   onUpdateResponsavel,
   onEditVenda,
   onDeleteVenda,
+  onDeleteFilteredVendas,
   onDataLoaded,
   onOpenNewSaleModal,
   onExportCSV,
 }) => {
   const [selectedDay, setSelectedDay] = useState<string>('Todos');
+  const [selectedTurno, setSelectedTurno] = useState<FiltroTurno>('Todos os Turnos');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
-  // 5. Filtros da Aba AeB: Dropdown extraindo as datas únicas lançadas
+  // 5. Filtros da Aba AeB: Dropdown extraindo as datas únicas lançadas em ordem cronológica real
   const availableDays = useMemo(() => {
     const daysSet = new Set<string>();
     vendas.forEach((v) => {
@@ -52,13 +61,17 @@ export const AeBTab: React.FC<AeBTabProps> = ({
         daysSet.add(v.data.trim());
       }
     });
-    return Array.from(daysSet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return Array.from(daysSet).sort(compareDatesChronologically);
   }, [vendas]);
 
-  // Filtragem dos dados visíveis
+  // Filtragem cumulativa dos dados visíveis (Data + Turno + Busca)
   const filteredVendas = useMemo(() => {
     return vendas.filter((venda) => {
       if (selectedDay !== 'Todos' && venda.data !== selectedDay) {
+        return false;
+      }
+
+      if (!matchesTurnoFilter(venda.hora, selectedTurno)) {
         return false;
       }
 
@@ -74,7 +87,7 @@ export const AeBTab: React.FC<AeBTabProps> = ({
 
       return true;
     });
-  }, [vendas, selectedDay, searchTerm]);
+  }, [vendas, selectedDay, selectedTurno, searchTerm]);
 
   // 3. Cards de Resumo no topo desta aba: "Total Arrecadado (AeB)" e "Quantidade de Itens Vendidos"
   const totalArrecadado = useMemo(() => {
@@ -86,10 +99,14 @@ export const AeBTab: React.FC<AeBTabProps> = ({
   const quantidadeItens = filteredVendas.filter((v) => !v.cancelado).length;
   const ticketMedio = quantidadeItens > 0 ? totalArrecadado / quantidadeItens : 0;
 
-  const hasActiveFilters = selectedDay !== 'Todos' || searchTerm.trim() !== '';
+  const hasActiveFilters =
+    selectedDay !== 'Todos' ||
+    selectedTurno !== 'Todos os Turnos' ||
+    searchTerm.trim() !== '';
 
   const handleClearFilters = () => {
     setSelectedDay('Todos');
+    setSelectedTurno('Todos os Turnos');
     setSearchTerm('');
   };
 
@@ -124,7 +141,7 @@ export const AeBTab: React.FC<AeBTabProps> = ({
       <AeBUploadArea onDataLoaded={onDataLoaded} />
 
       {/* 3. Cards de Resumo no topo desta aba */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Card 1: Total Arrecadado AeB */}
         <div className="bg-white border border-neutral-200/90 rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:border-blue-300 transition-colors">
           <div className="flex items-center justify-between mb-3">
@@ -191,7 +208,7 @@ export const AeBTab: React.FC<AeBTabProps> = ({
         </div>
       </div>
 
-      {/* Toolbar com Filtros de Dia e Busca */}
+      {/* Toolbar com Filtros de Dia, Turno e Busca */}
       <div className="space-y-0">
         <div className="bg-white border border-neutral-200/90 rounded-t-xl p-4 sm:p-5 border-b-0 space-y-3.5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -210,7 +227,7 @@ export const AeBTab: React.FC<AeBTabProps> = ({
             </div>
 
             {/* Ações da Toolbar */}
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={onOpenNewSaleModal}
@@ -229,13 +246,26 @@ export const AeBTab: React.FC<AeBTabProps> = ({
                 <FileSpreadsheet className="w-3.5 h-3.5 text-neutral-500" />
                 <span>Exportar CSV</span>
               </button>
+
+              {onDeleteFilteredVendas && (
+                <button
+                  type="button"
+                  disabled={filteredVendas.length === 0}
+                  onClick={() => onDeleteFilteredVendas(filteredVendas.map((v) => v.id))}
+                  title="Excluir do banco local apenas as vendas exibidas neste filtro atual"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100/90 active:bg-red-200/80 rounded-lg border border-red-200/90 transition-colors disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                  <span>Apagar Vendas Filtradas</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Filtros: Dia e Busca */}
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1">
+          {/* Filtros: Busca, Dia (Cronológico) e Turno - Empilhado no mobile (flex-col) e lado a lado no desktop (md:flex-row) */}
+          <div className="flex flex-col md:flex-row md:items-center md:flex-wrap lg:flex-nowrap gap-2.5 pt-1 w-full">
             {/* Campo de Busca */}
-            <div className="sm:col-span-7 relative">
+            <div className="w-full md:flex-1 min-w-[180px] relative">
               <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
@@ -255,8 +285,8 @@ export const AeBTab: React.FC<AeBTabProps> = ({
               )}
             </div>
 
-            {/* 5. Filtro por Dia: Dropdown extraindo datas únicas */}
-            <div className="sm:col-span-5 relative">
+            {/* Filtro por Dia: Dropdown extraindo datas únicas em ordem cronológica */}
+            <div className="w-full md:w-auto md:min-w-[140px] relative">
               <div className="relative">
                 <label htmlFor="filter-aeb-day" className="sr-only">
                   Filtrar por Dia
@@ -270,10 +300,40 @@ export const AeBTab: React.FC<AeBTabProps> = ({
                   onChange={(e) => setSelectedDay(e.target.value)}
                   className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-600/10 cursor-pointer font-medium"
                 >
-                  <option value="Todos">Todos os Dias ({availableDays.length} {availableDays.length === 1 ? 'dia' : 'dias'})</option>
+                  <option value="Todos">Todos os Dias ({availableDays.length})</option>
                   {availableDays.map((day) => (
                     <option key={day} value={day}>
                       Dia {day}
+                    </option>
+                  ))}
+                </select>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            {/* Filtro por Turno ao lado do filtro de Datas */}
+            <div className="w-full md:w-auto md:min-w-[170px] relative">
+              <div className="relative">
+                <label htmlFor="filter-aeb-turno" className="sr-only">
+                  Turno
+                </label>
+                <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
+                  <Clock className="w-4 h-4" />
+                </div>
+                <select
+                  id="filter-aeb-turno"
+                  aria-label="Turno"
+                  value={selectedTurno}
+                  onChange={(e) => setSelectedTurno(e.target.value as FiltroTurno)}
+                  className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-600/10 cursor-pointer font-medium"
+                >
+                  {FILTRO_TURNO_OPCOES.map((turnoOpt) => (
+                    <option key={turnoOpt} value={turnoOpt}>
+                      {turnoOpt}
                     </option>
                   ))}
                 </select>
@@ -288,12 +348,20 @@ export const AeBTab: React.FC<AeBTabProps> = ({
 
           {/* Tags de filtros ativos */}
           {hasActiveFilters && (
-            <div className="flex items-center gap-2 pt-1 border-t border-neutral-100 text-xs">
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-neutral-100 text-xs">
               <span className="text-neutral-500 font-medium">Filtros:</span>
               {selectedDay !== 'Todos' && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200">
                   Dia: {selectedDay}
                   <button type="button" onClick={() => setSelectedDay('Todos')} className="p-0.5 hover:text-blue-950 cursor-pointer">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+              {selectedTurno !== 'Todos os Turnos' && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200">
+                  Turno: {selectedTurno}
+                  <button type="button" onClick={() => setSelectedTurno('Todos os Turnos')} className="p-0.5 hover:text-blue-950 cursor-pointer">
                     <X className="w-3 h-3" />
                   </button>
                 </span>

@@ -1,20 +1,29 @@
-import React from 'react';
+import React, { useMemo, useRef } from 'react';
 import {
   Calendar,
+  Clock,
   Filter,
   Search,
   X,
-  UserCheck,
   UserX,
-  SlidersHorizontal,
   HardDrive,
+  Trash2,
+  Upload,
 } from 'lucide-react';
-import { FiltroTipo, FiltroStatusResponsavel } from '../types/venda';
+import {
+  FiltroTipo,
+  FiltroStatusResponsavel,
+  FiltroTurno,
+  FILTRO_TURNO_OPCOES,
+} from '../types/venda';
+import { compareDatesChronologically } from '../utils/formatters';
 
 interface TableToolbarProps {
   availableDays: string[];
   selectedDay: string;
   onSelectDay: (day: string) => void;
+  selectedTurno: FiltroTurno;
+  onSelectTurno: (turno: FiltroTurno) => void;
   selectedTipo: FiltroTipo;
   onSelectTipo: (tipo: FiltroTipo) => void;
   searchTerm: string;
@@ -28,26 +37,38 @@ interface TableToolbarProps {
   onOpenQuickAssign: () => void;
   pendingAssignCount: number;
   onOpenBackupModal?: () => void;
+  onImportBackupJSON?: (file: File) => void;
+  onDeleteFilteredVendas?: () => void;
 }
 
 export const TableToolbar: React.FC<TableToolbarProps> = ({
   availableDays,
   selectedDay,
   onSelectDay,
+  selectedTurno,
+  onSelectTurno,
   selectedTipo,
   onSelectTipo,
   searchTerm,
   onSearchChange,
   statusResponsavel,
   onSelectStatusResponsavel,
-  totalCount,
   filteredCount,
   onClearFilters,
   hasActiveFilters,
   onOpenQuickAssign,
   pendingAssignCount,
   onOpenBackupModal,
+  onImportBackupJSON,
+  onDeleteFilteredVendas,
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Garante ordenação cronológica real (mês menor -> dia menor) antes de renderizar no <select>
+  const sortedDays = useMemo(() => {
+    return [...availableDays].sort(compareDatesChronologically);
+  }, [availableDays]);
+
   return (
     <div className="bg-white border border-neutral-200/90 rounded-t-xl p-4 sm:p-5 border-b-0 space-y-3.5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -62,7 +83,7 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
             </span>
           </div>
           <p className="text-xs text-neutral-500 mt-0.5">
-            Visualize vendas, filtre por período/categoria e edite os operadores diretamente na tabela.
+            Visualize vendas, filtre por data, turno e categoria e edite os operadores diretamente na tabela.
           </p>
         </div>
 
@@ -92,19 +113,60 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
               <span>Backup (JSON)</span>
             </button>
           )}
+
+          {/* Importar Backup (Sincronização Manual) */}
+          {onImportBackupJSON && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    onImportBackupJSON(file);
+                    e.target.value = '';
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                title="Importar arquivo .json para sincronizar o caixa do PC para o celular"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Importar Backup</span>
+              </button>
+            </>
+          )}
+
+          {onDeleteFilteredVendas && (
+            <button
+              type="button"
+              disabled={filteredCount === 0}
+              onClick={onDeleteFilteredVendas}
+              title="Excluir do banco local apenas as vendas exibidas neste filtro atual"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100/90 active:bg-red-200/80 border border-red-200/90 rounded-lg transition-colors disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-600" />
+              <span>Apagar Vendas Filtradas</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Filter Controls Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 pt-1">
+      {/* Filter Controls Row: Empilhado no celular (flex-col) e lado a lado no desktop (md:flex-row) */}
+      <div className="flex flex-col md:flex-row md:items-center md:flex-wrap lg:flex-nowrap gap-2.5 pt-1 w-full">
         {/* Search Input */}
-        <div className="lg:col-span-4 relative">
+        <div className="w-full md:flex-1 min-w-[180px] relative">
           <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Buscar por item, comanda ou responsável..."
+            placeholder="Buscar item, comanda ou operador..."
             className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all"
           />
           {searchTerm && (
@@ -118,8 +180,8 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
           )}
         </div>
 
-        {/* Filter by Day (Select) - Mandatory requirement */}
-        <div className="lg:col-span-3 relative">
+        {/* Filter by Day (Select) - Ordenado Cronologicamente */}
+        <div className="w-full md:w-auto md:min-w-[140px] relative">
           <div className="relative">
             <label htmlFor="filter-day" className="sr-only">
               Filtrar por Dia
@@ -131,16 +193,16 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
               id="filter-day"
               value={selectedDay}
               onChange={(e) => onSelectDay(e.target.value)}
-              className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
+              className="w-full pl-9 pr-7 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
             >
-              <option value="Todos">Todos os Dias ({availableDays.length} dias)</option>
-              {availableDays.map((day) => (
+              <option value="Todos">Todos os Dias ({sortedDays.length})</option>
+              {sortedDays.map((day) => (
                 <option key={day} value={day}>
                   Dia {day}
                 </option>
               ))}
             </select>
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
+            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
               </svg>
@@ -148,8 +210,38 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
           </div>
         </div>
 
-        {/* Filter by Tipo de Venda (Select) - Mandatory requirement */}
-        <div className="lg:col-span-3 relative">
+        {/* Filter by Turno (Select) - Ao lado do filtro de Datas */}
+        <div className="w-full md:w-auto md:min-w-[170px] relative">
+          <div className="relative">
+            <label htmlFor="filter-turno" className="sr-only">
+              Turno
+            </label>
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
+              <Clock className="w-4 h-4" />
+            </div>
+            <select
+              id="filter-turno"
+              aria-label="Turno"
+              value={selectedTurno}
+              onChange={(e) => onSelectTurno(e.target.value as FiltroTurno)}
+              className="w-full pl-9 pr-7 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
+            >
+              {FILTRO_TURNO_OPCOES.map((turnoOpt) => (
+                <option key={turnoOpt} value={turnoOpt}>
+                  {turnoOpt}
+                </option>
+              ))}
+            </select>
+            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        {/* Filter by Tipo de Venda (Select) */}
+        <div className="w-full md:w-auto md:min-w-[130px] relative">
           <div className="relative">
             <label htmlFor="filter-tipo" className="sr-only">
               Filtrar por Tipo de Venda
@@ -161,13 +253,13 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
               id="filter-tipo"
               value={selectedTipo}
               onChange={(e) => onSelectTipo(e.target.value as FiltroTipo)}
-              className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
+              className="w-full pl-9 pr-7 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
             >
               <option value="Todos">Todos os Tipos</option>
               <option value="Boliche">Boliche</option>
               <option value="Fichas">Fichas</option>
             </select>
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
+            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
               </svg>
@@ -176,7 +268,7 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
         </div>
 
         {/* Filter by Responsible Status */}
-        <div className="lg:col-span-2 relative">
+        <div className="w-full md:w-auto md:min-w-[160px] relative">
           <div className="relative">
             <label htmlFor="filter-status-responsavel" className="sr-only">
               Status do Responsável
@@ -185,13 +277,13 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
               id="filter-status-responsavel"
               value={statusResponsavel}
               onChange={(e) => onSelectStatusResponsavel(e.target.value as FiltroStatusResponsavel)}
-              className="w-full px-3 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
+              className="w-full px-3 pr-7 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
             >
               <option value="todos">Responsável: Todos</option>
               <option value="pendentes">Sem Responsável</option>
               <option value="preenchidos">Com Responsável</option>
             </select>
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
+            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
               </svg>
@@ -210,6 +302,18 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectDay('Todos')}
+                className="hover:text-neutral-950 p-0.5 cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
+          {selectedTurno !== 'Todos os Turnos' && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-100 text-neutral-800 border border-neutral-200/80">
+              Turno: {selectedTurno}
+              <button
+                type="button"
+                onClick={() => onSelectTurno('Todos os Turnos')}
                 className="hover:text-neutral-950 p-0.5 cursor-pointer"
               >
                 <X className="w-3 h-3" />
