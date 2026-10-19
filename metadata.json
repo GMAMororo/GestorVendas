@@ -1,0 +1,6 @@
+{
+  "name": "GestorComandas - Dashboard de Vendas",
+  "description": "Dashboard moderno para gerenciamento de vendas e relatório de comandas com filtros dinâmicos e controle de responsáveis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
