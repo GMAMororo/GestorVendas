@@ -294,15 +294,6 @@ export const AeBTab: React.FC<AeBTabProps> = ({
               <FileSpreadsheet className="w-3.5 h-3.5 text-neutral-500" />
               <span>Exportar CSV</span>
             </button>
-
-            <button
-              type="button"
-              onClick={onOpenNewSaleModal}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Nova Venda (AeB)</span>
-            </button>
           </div>
         </div>
 
