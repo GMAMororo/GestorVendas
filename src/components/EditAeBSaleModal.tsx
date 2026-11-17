@@ -1,14 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { X, AlertCircle, GlassWater, DollarSign, Clock, Calendar, User } from 'lucide-react';
-import { VendaAeB } from '../types/venda';
-import { AeBAutocomplete } from './AeBAutocomplete';
-import { buscarProdutoNoCatalogo } from '../data/catalogoAeB';
+import {
+  X,
+  Save,
+  GlassWater,
+  Search,
+  DollarSign,
+  Ticket,
+  Lock,
+} from 'lucide-react';
+import { VendaAeB, MotivoOperacional } from '../types/venda';
+import { CATALOGO_AEB_PRODUTOS } from '../utils/voluxParser';
+import {
+  formatCurrencyBRL,
+  isRegistroVoucher,
+  getContaAdmCode,
+} from '../utils/formatters';
 
 interface EditAeBSaleModalProps {
   isOpen: boolean;
   venda: VendaAeB | null;
   onClose: () => void;
-  onSaveVenda: (venda: VendaAeB) => void;
+  onSaveVenda: (vendaAtualizada: VendaAeB) => void;
 }
 
 export const EditAeBSaleModal: React.FC<EditAeBSaleModalProps> = ({
@@ -20,213 +32,306 @@ export const EditAeBSaleModal: React.FC<EditAeBSaleModalProps> = ({
   const [data, setData] = useState('');
   const [hora, setHora] = useState('');
   const [item, setItem] = useState('');
-  const [preco, setPreco] = useState('');
+  const [precoUnitario, setPrecoUnitario] = useState<number>(0);
+  const [qtde, setQtde] = useState<number>(1);
+  const [motivo, setMotivo] = useState<MotivoOperacional>('Normal');
   const [responsavel, setResponsavel] = useState('');
-  const [error, setError] = useState('');
+  const [observacao, setObservacao] = useState('');
+  const [searchCat, setSearchCat] = useState('');
+
+  // Fechar ao pressionar a tecla ESC
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   useEffect(() => {
-    if (isOpen && venda) {
-      setData(venda.data || '');
-      setHora(venda.hora || '');
-      setItem(venda.item || '');
-      setPreco(venda.preco.toFixed(2).replace('.', ','));
+    if (venda && isOpen) {
+      setData(venda.data);
+      setHora(venda.hora);
+      setQtde(Math.max(1, Number(venda.qtde) || 1));
+      const initialMotivo: MotivoOperacional = isRegistroVoucher(venda)
+        ? 'Voucher'
+        : 'Normal';
+      setMotivo(initialMotivo);
+
+      const encontrado =
+        CATALOGO_AEB_PRODUTOS.find((p) => p.nome === venda.item) ||
+        CATALOGO_AEB_PRODUTOS[0];
+      setItem(encontrado.nome);
+      setPrecoUnitario(encontrado.preco);
+
       setResponsavel(venda.responsavel || '');
-      setError('');
+      setObservacao(venda.observacao || '');
     }
-  }, [isOpen, venda]);
+  }, [venda, isOpen]);
 
   if (!isOpen || !venda) return null;
 
-  const handleItemChange = (novoItem: string, precoSugerido?: number) => {
-    setItem(novoItem);
-    setError('');
+  const contaAdmExisting = getContaAdmCode(venda);
+  const isVoucher = motivo === 'Voucher';
+  const quantidadeValida = Math.max(1, Math.floor(Number(qtde) || 1));
+  const valorTotalCalculado = Number((quantidadeValida * precoUnitario).toFixed(2));
 
-    if (precoSugerido !== undefined) {
-      setPreco(precoSugerido.toFixed(2).replace('.', ','));
-    } else {
-      const prodCatalogo = buscarProdutoNoCatalogo(novoItem);
-      if (prodCatalogo) {
-        setPreco(prodCatalogo.preco.toFixed(2).replace('.', ','));
-      }
-    }
+  const handleSelectProduto = (nome: string, valor: number) => {
+    setItem(nome);
+    setPrecoUnitario(valor);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const isContaAdmFinal = Boolean(contaAdmExisting);
+    const isVoucherFinal = !isContaAdmFinal && isVoucher;
 
-    if (!item.trim()) {
-      setError('Por favor, informe a descrição do item de bebida.');
-      return;
-    }
-
-    const numPreco = parseFloat(preco.replace(',', '.'));
-    if (isNaN(numPreco) || numPreco <= 0) {
-      setError('Por favor, informe um valor de preço válido maior que zero.');
-      return;
-    }
-
-    const atualizada: VendaAeB = {
+    onSaveVenda({
       ...venda,
       data: data.trim() || venda.data,
       hora: hora.trim() || venda.hora,
-      item: item.trim(),
-      preco: numPreco,
+      item,
+      qtde: quantidadeValida,
+      preco: valorTotalCalculado,
       responsavel: responsavel.trim(),
-    };
+      observacao: observacao.trim() || undefined,
+      conta3000: isContaAdmFinal,
+      contaAdm: contaAdmExisting || venda.contaAdm,
+      espaco: contaAdmExisting || venda.espaco,
+      isCortesia: isContaAdmFinal,
+      isVoucher: isVoucherFinal,
+      motivoOperacional: isContaAdmFinal
+        ? 'Cortesia'
+        : isVoucherFinal
+          ? 'Voucher'
+          : 'Normal',
+    });
 
-    onSaveVenda(atualizada);
     onClose();
   };
 
+  const produtosFiltrados = CATALOGO_AEB_PRODUTOS.filter((p) =>
+    p.nome.toLowerCase().includes(searchCat.toLowerCase().trim())
+  );
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-neutral-950/50 backdrop-blur-[2px] animate-in fade-in duration-150"
+    >
       <div
-        className="bg-white rounded-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-md border border-neutral-200 shadow-xl animate-in fade-in zoom-in-95 duration-150"
-        role="dialog"
-        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl border border-neutral-200 shadow-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-lg"
       >
-        <div className="px-5 py-4 border-b border-neutral-200 flex items-center justify-between">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-100 bg-blue-50/40 sticky top-0 z-10">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
               <GlassWater className="w-4 h-4" />
             </div>
             <div>
               <h3 className="text-base font-semibold text-neutral-900">
-                Editar Venda · Alimentos e Bebidas (AeB) #{venda.comanda || venda.id}
+                Editar Venda
               </h3>
               <p className="text-xs text-neutral-500">
-                Corrija o item, preço, data ou responsável da venda de alimentos e bebidas
+                Selecione a modalidade (Normal / Voucher) e o item do catálogo AeB
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-neutral-400 hover:text-neutral-600 p-1 rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {error && (
-            <div className="p-3 rounded-lg bg-red-50 border border-red-200 flex items-center gap-2 text-xs text-red-700">
-              <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-              <span>{error}</span>
-            </div>
-          )}
-
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {/* Modalidade */}
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold text-neutral-700">
-                Item / Alimentos e Bebidas *
+            <label className="block text-xs font-medium text-neutral-700 mb-1.5">
+              Modalidade / Forma Operacional
+            </label>
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => setMotivo('Normal')}
+                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                  motivo === 'Normal'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                    : 'bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50'
+                }`}
+              >
+                <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Venda Normal</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMotivo('Voucher')}
+                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                  motivo === 'Voucher'
+                    ? 'bg-violet-50 border-violet-300 text-violet-900'
+                    : 'bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50'
+                }`}
+              >
+                <Ticket className="w-3.5 h-3.5 text-violet-600" />
+                <span>🎟️ Voucher</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Catálogo Oficial AeB */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium text-neutral-700">
+                Catálogo Oficial de Bebidas & Conveniência
               </label>
-              <span className="text-[11px] text-blue-600 font-medium">
-                Catálogo Volux
+              <span className="inline-flex items-center gap-1 text-[11px] text-neutral-500 font-mono-tabular">
+                <Lock className="w-3 h-3 text-neutral-400" />
+                Unitário: <strong>{formatCurrencyBRL(precoUnitario)}</strong>
               </span>
             </div>
 
-            <AeBAutocomplete
-              value={item}
-              onChange={handleItemChange}
-              placeholder="Buscar no catálogo ou digitar novo nome..."
+            <div className="relative mb-2">
+              <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchCat}
+                onChange={(e) => setSearchCat(e.target.value)}
+                placeholder="Filtrar produto no catálogo..."
+                className="w-full pl-8 pr-3 py-1.5 text-xs bg-neutral-50 border border-neutral-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-400"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-44 overflow-y-auto p-1 border border-neutral-200/80 rounded-xl bg-neutral-50/50">
+              {produtosFiltrados.map((op) => {
+                const isSelected = item === op.nome;
+                return (
+                  <button
+                    key={op.nome}
+                    type="button"
+                    onClick={() => handleSelectProduto(op.nome, op.preco)}
+                    className={`flex items-center justify-between px-2.5 py-2 rounded-lg border text-left text-xs transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-600 text-white border-blue-600 font-medium shadow-2xs'
+                        : 'bg-white text-neutral-700 border-neutral-200/80 hover:bg-blue-50/50 hover:border-blue-200'
+                    }`}
+                  >
+                    <span className="truncate pr-2">{op.nome}</span>
+                    <span
+                      className={`font-mono-tabular font-semibold shrink-0 ${
+                        isSelected ? 'text-blue-100' : 'text-neutral-900'
+                      }`}
+                    >
+                      {formatCurrencyBRL(op.preco)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Data e Hora */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-neutral-700 mb-1">
+                Data (DD/MM)
+              </label>
+              <input
+                type="text"
+                value={data}
+                onChange={(e) => setData(e.target.value)}
+                required
+                className="w-full px-3 py-2 text-xs font-mono-tabular bg-neutral-50 border border-neutral-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-neutral-700 mb-1">
+                Hora (HH:MM)
+              </label>
+              <input
+                type="text"
+                value={hora}
+                onChange={(e) => setHora(e.target.value)}
+                required
+                className="w-full px-3 py-2 text-xs font-mono-tabular bg-neutral-50 border border-neutral-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          {/* Quantidade, Valor Total (Bloqueado) & Responsável */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-neutral-700 mb-1">
+                Quantidade
+              </label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={qtde}
+                onChange={(e) => setQtde(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                required
+                className="w-full px-3 py-2 text-xs font-mono-tabular font-semibold bg-neutral-50 border border-neutral-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-neutral-700 mb-1 flex items-center gap-1">
+                <Lock className="w-3 h-3 text-neutral-400" />
+                <span>Valor Total (R$)</span>
+              </label>
+              <input
+                type="text"
+                value={formatCurrencyBRL(valorTotalCalculado)}
+                readOnly
+                className="w-full px-3 py-2 text-xs font-mono-tabular font-bold bg-neutral-100 border border-neutral-300 text-neutral-900 rounded-lg cursor-not-allowed focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-neutral-700 mb-1">
+                Responsável pela Venda
+              </label>
+              <input
+                type="text"
+                value={responsavel}
+                onChange={(e) => setResponsavel(e.target.value)}
+                placeholder="Nome do operador..."
+                className="w-full px-3 py-2 text-xs bg-neutral-50 border border-neutral-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          {/* Observações (Opcional) */}
+          <div>
+            <label className="block text-xs font-medium text-neutral-700 mb-1">
+              Observações (Opcional)
+            </label>
+            <input
+              type="text"
+              value={observacao}
+              onChange={(e) => setObservacao(e.target.value)}
+              placeholder='Ex: "Autorizado pela gerência", "Troca de bebida"...'
+              className="w-full px-3 py-2 text-xs bg-neutral-50 border border-neutral-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 focus:border-blue-500"
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label htmlFor="edit-aeb-preco" className="text-xs font-semibold text-neutral-700">
-                  Preço Total (R$) *
-                </label>
-                <span className="text-[10px] text-neutral-400">Editável</span>
-              </div>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 text-neutral-400 text-xs">
-                  <DollarSign className="w-3.5 h-3.5" />
-                </span>
-                <input
-                  id="edit-aeb-preco"
-                  type="text"
-                  required
-                  value={preco}
-                  onChange={(e) => {
-                    setPreco(e.target.value);
-                    setError('');
-                  }}
-                  className="w-full pl-8 pr-3 py-2 text-xs sm:text-sm bg-neutral-50 border border-neutral-200 rounded-lg text-neutral-900 font-mono-tabular focus:outline-none focus:bg-white focus:border-neutral-900 focus:ring-2 focus:ring-neutral-900/10 font-semibold"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="edit-aeb-responsavel" className="block text-xs font-semibold text-neutral-700 mb-1">
-                Responsável
-              </label>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 text-neutral-400 text-xs">
-                  <User className="w-3.5 h-3.5" />
-                </span>
-                <input
-                  id="edit-aeb-responsavel"
-                  type="text"
-                  value={responsavel}
-                  onChange={(e) => setResponsavel(e.target.value)}
-                  placeholder="ex: Carlos Lima"
-                  className="w-full pl-8 pr-3 py-2 text-xs sm:text-sm bg-neutral-50 border border-neutral-200 rounded-lg text-neutral-900 focus:outline-none focus:bg-white focus:border-neutral-900 focus:ring-2 focus:ring-neutral-900/10"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-neutral-700 mb-1">
-                Data (DD/MM)
-              </label>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 text-neutral-400 text-xs">
-                  <Calendar className="w-3.5 h-3.5" />
-                </span>
-                <input
-                  type="text"
-                  value={data}
-                  onChange={(e) => setData(e.target.value)}
-                  className="w-full pl-8 pr-3 py-2 text-xs sm:text-sm bg-neutral-50 border border-neutral-200 rounded-lg text-neutral-900 font-mono-tabular focus:outline-none focus:bg-white focus:border-neutral-900 focus:ring-2 focus:ring-neutral-900/10"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-neutral-700 mb-1">
-                Hora (HH:MM)
-              </label>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 text-neutral-400 text-xs">
-                  <Clock className="w-3.5 h-3.5" />
-                </span>
-                <input
-                  type="text"
-                  value={hora}
-                  onChange={(e) => setHora(e.target.value)}
-                  className="w-full pl-8 pr-3 py-2 text-xs sm:text-sm bg-neutral-50 border border-neutral-200 rounded-lg text-neutral-900 font-mono-tabular focus:outline-none focus:bg-white focus:border-neutral-900 focus:ring-2 focus:ring-neutral-900/10"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-neutral-200 flex items-center justify-end gap-2">
+          <div className="pt-2 flex items-center justify-end gap-2 border-t border-neutral-100">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-2 text-xs font-medium text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors cursor-pointer"
+              className="px-4 py-2 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200/70 rounded-lg transition-colors cursor-pointer"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-xs font-medium text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 transition-colors shadow-sm cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors cursor-pointer"
             >
-              Salvar Alterações
+              <Save className="w-3.5 h-3.5" />
+              <span>Salvar Alterações</span>
             </button>
           </div>
         </form>

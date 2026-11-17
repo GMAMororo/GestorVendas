@@ -1,11 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   UploadCloud,
   FileText,
   Loader2,
   CheckCircle,
   AlertTriangle,
-  Sparkles,
   BookOpen,
   X,
   FileCode,
@@ -14,7 +13,6 @@ import {
   extractTextFromPdf,
   parseVoluxTextWithReconciliation,
   VoluxReconciliationResult,
-  SAMPLE_VOLUX_REPORT_TEXT,
   CATALOGO_VOLUX,
 } from '../utils/voluxParser';
 import { VendaComanda } from '../types/venda';
@@ -58,6 +56,19 @@ export const VoluxUploadArea: React.FC<VoluxUploadAreaProps> = ({
   const [pastedText, setPastedText] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!discrepancyAlert && !showCatalogModal && !showPasteModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (discrepancyAlert) setDiscrepancyAlert(null);
+        if (showCatalogModal) setShowCatalogModal(false);
+        if (showPasteModal) setShowPasteModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [discrepancyAlert, showCatalogModal, showPasteModal]);
 
   const commitValidatedData = (
     reconciliation: VoluxReconciliationResult,
@@ -199,15 +210,6 @@ export const VoluxUploadArea: React.FC<VoluxUploadAreaProps> = ({
     fileInputRef.current?.click();
   };
 
-  const handleLoadSample = () => {
-    setIsLoading(true);
-    setErrorMessage(null);
-    setTimeout(() => {
-      processTextAndEmit(SAMPLE_VOLUX_REPORT_TEXT, 'Relatorio_Volux_Exemplo_05-06_Out.pdf');
-      setIsLoading(false);
-    }, 400);
-  };
-
   const handleProcessPastedText = () => {
     if (!pastedText.trim()) return;
     processTextAndEmit(pastedText, 'Texto_Colado_Volux.txt');
@@ -305,18 +307,6 @@ export const VoluxUploadArea: React.FC<VoluxUploadAreaProps> = ({
               )}
             </button>
 
-            {/* Ação rápida: Testar com relatório de exemplo Volux */}
-            <button
-              type="button"
-              disabled={isLoading}
-              onClick={handleLoadSample}
-              title="Carregar exemplo oficial com vendas de 05/10 e 06/10 (inclui Qtde >= 2, cancelamentos e conciliação de resumo)"
-              className="inline-flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200/80 active:bg-neutral-200 rounded-lg border border-neutral-200 transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>Carregar Exemplo Volux</span>
-            </button>
-
             {/* Botão de Ver Catálogo Oficial */}
             <button
               type="button"
@@ -380,8 +370,12 @@ export const VoluxUploadArea: React.FC<VoluxUploadAreaProps> = ({
 
       {/* Modal de Alerta Visual de Discrepância na Conciliação */}
       {discrepancyAlert && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/50 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+        <div
+          onClick={() => setDiscrepancyAlert(null)}
+          className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/50 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4"
+        >
           <div
+            onClick={(e) => e.stopPropagation()}
             className="bg-white rounded-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-2xl border border-red-200 shadow-xl animate-in fade-in zoom-in-95 duration-150"
             role="alertdialog"
             aria-modal="true"
@@ -490,8 +484,12 @@ export const VoluxUploadArea: React.FC<VoluxUploadAreaProps> = ({
 
       {/* Modal do Catálogo Volux & Regra de Ouro */}
       {showCatalogModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+        <div
+          onClick={() => setShowCatalogModal(false)}
+          className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4"
+        >
           <div
+            onClick={(e) => e.stopPropagation()}
             className="bg-white rounded-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-lg border border-neutral-200 shadow-xl animate-in fade-in zoom-in-95 duration-150"
             role="dialog"
             aria-modal="true"
@@ -581,8 +579,12 @@ export const VoluxUploadArea: React.FC<VoluxUploadAreaProps> = ({
 
       {/* Modal de Colar Texto Bruto */}
       {showPasteModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+        <div
+          onClick={() => setShowPasteModal(false)}
+          className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4"
+        >
           <div
+            onClick={(e) => e.stopPropagation()}
             className="bg-white rounded-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-lg border border-neutral-200 shadow-xl animate-in fade-in zoom-in-95 duration-150"
             role="dialog"
             aria-modal="true"
@@ -615,13 +617,6 @@ export const VoluxUploadArea: React.FC<VoluxUploadAreaProps> = ({
               />
               <div className="flex items-center justify-between text-xs text-neutral-500">
                 <span>O parser extrai Comanda, Data, Hora, Item e Preço automaticamente.</span>
-                <button
-                  type="button"
-                  onClick={() => setPastedText(SAMPLE_VOLUX_REPORT_TEXT)}
-                  className="text-neutral-700 hover:underline font-medium cursor-pointer"
-                >
-                  Inserir texto de exemplo
-                </button>
               </div>
             </div>
 

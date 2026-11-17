@@ -1,116 +1,277 @@
 import React from 'react';
-import { DollarSign, Ticket, CircleDot, TrendingUp, Users } from 'lucide-react';
-import { VendaComanda } from '../types/venda';
-import { formatCurrencyBRL } from '../utils/formatters';
+import {
+  DollarSign,
+  CircleDot,
+  Ticket,
+  GlassWater,
+  Gift,
+  Wrench,
+} from 'lucide-react';
+import { VendaComanda, VendaAeB } from '../types/venda';
+import {
+  formatCurrencyBRL,
+  isRegistroCortesia,
+  isRegistroManutencao,
+  isRegistroVoucher,
+  getValorMonetarioEfetivo,
+  getValorNaoMonetarioVoucher,
+} from '../utils/formatters';
 
 interface SummaryCardsProps {
   filteredVendas: VendaComanda[];
+  filteredVendasAeB?: VendaAeB[];
   totalVendasCount: number;
 }
 
 export const SummaryCards: React.FC<SummaryCardsProps> = ({
   filteredVendas,
+  filteredVendasAeB = [],
   totalVendasCount,
 }) => {
-  // Calculations based strictly on currently filtered items (garantindo exclusão de cancelados)
-  const vendasValidas = filteredVendas.filter((v) => !v.cancelado);
-  const totalArrecadado = vendasValidas.reduce((acc, curr) => acc + curr.preco, 0);
+  // Ignora comandas canceladas/estornadas
+  const vendasAtivas = filteredVendas.filter(
+    (v) => !v.cancelado && v.status !== 'Cancelado'
+  );
+  const vendasAeBAtivas = filteredVendasAeB.filter(
+    (v) => !v.cancelado && v.status !== 'Cancelado'
+  );
 
-  const vendasBoliche = vendasValidas.filter((v) => v.tipo_venda === 'Boliche');
-  const totalBoliche = vendasBoliche.reduce((acc, curr) => acc + curr.preco, 0);
+  // Separa por categoria
+  const bolicheAtivas = vendasAtivas.filter((v) => v.tipo_venda === 'Boliche');
+  const fichasAtivas = vendasAtivas.filter((v) => v.tipo_venda === 'Fichas');
 
-  const vendasFichas = vendasValidas.filter((v) => v.tipo_venda === 'Fichas');
-  const totalFichas = vendasFichas.reduce((acc, curr) => acc + curr.preco, 0);
+  // Combina vendas AeB vindas da coleção comandas_aeb e eventuais registros AeB em vendasAtivas (sem duplicar ID)
+  const aebIdsFromComandas = new Set(
+    vendasAtivas.filter((v) => v.tipo_venda === 'AeB').map((v) => v.id)
+  );
+  const aebCombinadas: Array<Partial<VendaComanda & VendaAeB> & { item: string; preco: number }> = [
+    ...vendasAtivas.filter((v) => v.tipo_venda === 'AeB'),
+    ...vendasAeBAtivas.filter((v) => !aebIdsFromComandas.has(v.id)),
+  ];
 
-  const pendentesResponsavel = filteredVendas.filter(
-    (v) => !v.responsavel || v.responsavel.trim() === ''
-  ).length;
+  // Faturamento Real Efetivo em Caixa: Vouchers NÃO entram no Total Arrecadado em Dinheiro/Caixa
+  const totalBoliche = bolicheAtivas.reduce(
+    (sum, item) => sum + getValorMonetarioEfetivo(item),
+    0
+  );
+
+  const totalFichas = fichasAtivas.reduce(
+    (sum, item) => sum + getValorMonetarioEfetivo(item),
+    0
+  );
+
+  const totalAeB = aebCombinadas.reduce(
+    (sum, item) => sum + getValorMonetarioEfetivo(item),
+    0
+  );
+
+  const totalArrecadado = totalBoliche + totalFichas + totalAeB;
+
+  // Contadores de Vouchers (Qtd e Valor Não Monetário)
+  const sumUnidades = (arr: Array<{ qtde?: number }>) =>
+    arr.reduce((acc, item) => acc + Math.max(1, Number(item.qtde) || 1), 0);
+
+  const vouchersBolicheList = bolicheAtivas.filter((v) => isRegistroVoucher(v));
+  const vouchersAeBList = aebCombinadas.filter((v) => isRegistroVoucher(v));
+
+  const vouchersBolicheQtd = sumUnidades(vouchersBolicheList);
+  const vouchersBolicheValor = vouchersBolicheList.reduce(
+    (acc, v) => acc + getValorNaoMonetarioVoucher(v),
+    0
+  );
+
+  const vouchersAeBQtd = sumUnidades(vouchersAeBList);
+  const vouchersAeBValor = vouchersAeBList.reduce(
+    (acc, v) => acc + getValorNaoMonetarioVoucher(v),
+    0
+  );
+
+  const totalVouchersQtd = vouchersBolicheQtd + vouchersAeBQtd;
+  const totalVouchersValor = vouchersBolicheValor + vouchersAeBValor;
+
+  // Contadores de Cortesias e Manutenções (multiplicados por venda.qtde)
+  const cortesiasBoliche = sumUnidades(
+    bolicheAtivas.filter((v) => isRegistroCortesia(v))
+  );
+  const cortesiasFichas = sumUnidades(
+    fichasAtivas.filter((v) => isRegistroCortesia(v))
+  );
+  const manutencoesFichas = sumUnidades(
+    fichasAtivas.filter((v) => isRegistroManutencao(v))
+  );
+
+  // Contadores de itens vendidos multiplicados pela propriedade qtde de cada linha (Voucher CONTA normalmente nos itens vendidos!)
+  const countBolichePagos = sumUnidades(
+    bolicheAtivas.filter(
+      (v) =>
+        getValorMonetarioEfetivo(v) > 0 ||
+        isRegistroVoucher(v) ||
+        (!isRegistroCortesia(v) && !isRegistroManutencao(v))
+    )
+  );
+  const countFichasPagos = sumUnidades(
+    fichasAtivas.filter(
+      (v) =>
+        getValorMonetarioEfetivo(v) > 0 ||
+        (!isRegistroCortesia(v) && !isRegistroManutencao(v))
+    )
+  );
+  const countAeBPagos = sumUnidades(
+    aebCombinadas.filter(
+      (v) =>
+        getValorMonetarioEfetivo(v) > 0 ||
+        isRegistroVoucher(v) ||
+        (!isRegistroCortesia(v) && !isRegistroManutencao(v))
+    )
+  );
+
+  const bolichePercentage =
+    totalArrecadado > 0 ? Math.round((totalBoliche / totalArrecadado) * 100) : 0;
+  const fichasPercentage =
+    totalArrecadado > 0 ? Math.round((totalFichas / totalArrecadado) * 100) : 0;
+  const aebPercentage =
+    totalArrecadado > 0 ? Math.round((totalAeB / totalArrecadado) * 100) : 0;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-      {/* Card 1: Total Arrecadado */}
-      <div className="bg-white border border-neutral-200/90 rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:border-neutral-300 transition-colors">
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-xs font-medium text-neutral-500 uppercase tracking-wider">
-            Total Arrecadado
-          </span>
-          <div className="w-8 h-8 rounded-lg bg-neutral-100 flex items-center justify-center text-neutral-700">
-            <DollarSign className="w-4 h-4" />
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Card 1: Total Arrecadado (Faturamento Monetário em Caixa) */}
+      <div className="bg-white rounded-xl border border-neutral-200/80 p-5 shadow-[0_1px_3px_rgba(0,0,0,0.03)] flex flex-col justify-between">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+              Total Arrecadado (Caixa)
+            </p>
+            <h2 className="mt-2 text-2xl sm:text-3xl font-bold text-neutral-900 font-mono-tabular tracking-tight">
+              {formatCurrencyBRL(totalArrecadado)}
+            </h2>
+            <p className="mt-1.5 text-xs text-neutral-500 font-medium">
+              Cortesias: {cortesiasBoliche + cortesiasFichas} | Manutenção:{' '}
+              {manutencoesFichas}
+            </p>
+            <p className="mt-1 text-xs font-semibold text-purple-700">
+              🎟️ Vouchers: {totalVouchersQtd} un. ({formatCurrencyBRL(totalVouchersValor)} não monetário)
+            </p>
+          </div>
+          <div className="w-10 h-10 rounded-lg bg-emerald-50 border border-emerald-200/60 flex items-center justify-center text-emerald-700 shrink-0">
+            <DollarSign className="w-5 h-5" />
           </div>
         </div>
-        <div className="space-y-1">
-          <div className="text-2xl sm:text-3xl font-semibold text-neutral-900 font-mono-tabular tracking-tight">
-            {formatCurrencyBRL(totalArrecadado)}
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-neutral-500">
-            <span className="font-medium text-neutral-700 font-mono-tabular">
+        <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between text-xs text-neutral-500">
+          <span>
+            Exibindo{' '}
+            <strong className="text-neutral-800 font-semibold">
               {filteredVendas.length}
-            </span>
-            <span>{filteredVendas.length === 1 ? 'comanda filtrada' : 'comandas filtradas'}</span>
-            {filteredVendas.length !== totalVendasCount && (
-              <span className="text-neutral-400">
-                (de {totalVendasCount} no total)
-              </span>
-            )}
-          </div>
+            </strong>{' '}
+            de {totalVendasCount} comandas
+          </span>
+          <span className="font-mono-tabular text-emerald-700 font-medium">100%</span>
         </div>
       </div>
 
-      {/* Card 2: Total de Vendas de Boliche */}
-      <div className="bg-white border border-neutral-200/90 rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:border-blue-200 transition-colors">
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-xs font-medium text-blue-800 uppercase tracking-wider flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
-            Total Boliche
-          </span>
-          <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-            <CircleDot className="w-4 h-4" />
+      {/* Card 2: Total em Boliche */}
+      <div className="bg-white rounded-xl border border-neutral-200/80 p-5 shadow-[0_1px_3px_rgba(0,0,0,0.03)] flex flex-col justify-between">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                Total em Boliche
+              </p>
+            </div>
+            <h2 className="mt-2 text-2xl sm:text-3xl font-bold text-neutral-900 font-mono-tabular tracking-tight">
+              {formatCurrencyBRL(totalBoliche)}
+            </h2>
+            <p className="mt-1.5 text-xs font-semibold text-amber-700 flex items-center gap-1">
+              <span>🎁 Cortesias: {cortesiasBoliche}</span>
+            </p>
+            <p className="mt-1 text-xs font-semibold text-purple-700">
+              🎟️ Vouchers: {vouchersBolicheQtd} un. ({formatCurrencyBRL(vouchersBolicheValor)} não monetário)
+            </p>
+          </div>
+          <div className="w-10 h-10 rounded-lg bg-indigo-50 border border-indigo-200/60 flex items-center justify-center text-indigo-700 shrink-0">
+            <CircleDot className="w-5 h-5" />
           </div>
         </div>
-        <div className="space-y-1">
-          <div className="text-2xl sm:text-3xl font-semibold text-neutral-900 font-mono-tabular tracking-tight">
-            {formatCurrencyBRL(totalBoliche)}
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-neutral-500">
-            <span className="font-medium text-blue-700 font-mono-tabular">
-              {vendasBoliche.length}
-            </span>
-            <span>{vendasBoliche.length === 1 ? 'locação / item' : 'locações / itens'}</span>
-            {totalArrecadado > 0 && (
-              <span className="text-neutral-400 font-mono-tabular">
-                · {((totalBoliche / totalArrecadado) * 100).toFixed(0)}% do valor
-              </span>
-            )}
-          </div>
+        <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between text-xs text-neutral-500">
+          <span>
+            <strong className="text-neutral-800 font-semibold">{countBolichePagos}</strong>{' '}
+            {countBolichePagos === 1 ? 'pista registrada' : 'pistas registradas'}
+          </span>
+          <span className="font-mono-tabular text-indigo-700 font-medium">
+            {bolichePercentage}% do total
+          </span>
         </div>
       </div>
 
-      {/* Card 3: Total de Fichas */}
-      <div className="bg-white border border-neutral-200/90 rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:border-emerald-200 transition-colors">
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-xs font-medium text-emerald-800 uppercase tracking-wider flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-            Total Fichas
-          </span>
-          <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-            <Ticket className="w-4 h-4" />
+      {/* Card 3: Total em Fichas */}
+      <div className="bg-white rounded-xl border border-neutral-200/80 p-5 shadow-[0_1px_3px_rgba(0,0,0,0.03)] flex flex-col justify-between">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                Total em Fichas
+              </p>
+            </div>
+            <h2 className="mt-2 text-2xl sm:text-3xl font-bold text-neutral-900 font-mono-tabular tracking-tight">
+              {formatCurrencyBRL(totalFichas)}
+            </h2>
+            <p className="mt-1.5 text-xs font-semibold text-neutral-600 flex items-center gap-1.5 flex-wrap">
+              <span className="inline-flex items-center gap-1 text-amber-700">
+                <Gift className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                Cortesias: {cortesiasFichas}
+              </span>
+              <span className="text-neutral-300">|</span>
+              <span className="inline-flex items-center gap-1 text-cyan-700">
+                <Wrench className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
+                Manutenção: {manutencoesFichas}
+              </span>
+            </p>
+          </div>
+          <div className="w-10 h-10 rounded-lg bg-amber-50 border border-amber-200/60 flex items-center justify-center text-amber-700 shrink-0">
+            <Ticket className="w-5 h-5" />
           </div>
         </div>
-        <div className="space-y-1">
-          <div className="text-2xl sm:text-3xl font-semibold text-neutral-900 font-mono-tabular tracking-tight">
-            {formatCurrencyBRL(totalFichas)}
+        <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between text-xs text-neutral-500">
+          <span>
+            <strong className="text-neutral-800 font-semibold">{countFichasPagos}</strong>{' '}
+            {countFichasPagos === 1 ? 'venda registrada' : 'vendas registradas'}
+          </span>
+          <span className="font-mono-tabular text-amber-700 font-medium">
+            {fichasPercentage}% do total
+          </span>
+        </div>
+      </div>
+
+      {/* Card 4: Total em AeB */}
+      <div className="bg-white rounded-xl border border-neutral-200/80 p-5 shadow-[0_1px_3px_rgba(0,0,0,0.03)] flex flex-col justify-between">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                Total em AeB
+              </p>
+            </div>
+            <h2 className="mt-2 text-2xl sm:text-3xl font-bold text-neutral-900 font-mono-tabular tracking-tight">
+              {formatCurrencyBRL(totalAeB)}
+            </h2>
+            <p className="mt-1.5 text-xs font-semibold text-purple-700">
+              🎟️ Vouchers: {vouchersAeBQtd} un. ({formatCurrencyBRL(vouchersAeBValor)} não monetário)
+            </p>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-neutral-500">
-            <span className="font-medium text-emerald-700 font-mono-tabular">
-              {vendasFichas.length}
-            </span>
-            <span>{vendasFichas.length === 1 ? 'venda registrada' : 'vendas registradas'}</span>
-            {totalArrecadado > 0 && (
-              <span className="text-neutral-400 font-mono-tabular">
-                · {((totalFichas / totalArrecadado) * 100).toFixed(0)}% do valor
-              </span>
-            )}
+          <div className="w-10 h-10 rounded-lg bg-blue-50 border border-blue-200/60 flex items-center justify-center text-blue-700 shrink-0">
+            <GlassWater className="w-5 h-5" />
           </div>
+        </div>
+        <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between text-xs text-neutral-500">
+          <span>
+            <strong className="text-neutral-800 font-semibold">{countAeBPagos}</strong>{' '}
+            {countAeBPagos === 1 ? 'item vendido' : 'itens vendidos'}
+          </span>
+          <span className="font-mono-tabular text-blue-700 font-medium">
+            {aebPercentage}% do total
+          </span>
         </div>
       </div>
     </div>

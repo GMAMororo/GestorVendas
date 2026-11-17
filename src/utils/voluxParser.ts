@@ -48,6 +48,22 @@ export function formatItemForDeterministicId(item: string): string {
 }
 
 /**
+ * Normaliza qualquer ID para um ID limpo ([a-zA-Z0-9_-]).
+ */
+export function toFirestoreDocId(rawId: string): string {
+  if (!rawId || !rawId.trim()) return generateUniqueId();
+  const sanitized = rawId
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 120);
+  return sanitized || generateUniqueId();
+}
+
+/**
  * Monta a string base do ID determinístico do PDF:
  * pdf_${comanda}_${data}_${hora}_${nomeDoItem}
  */
@@ -57,18 +73,18 @@ export function generateBaseDeterministicPdfId(
   hora: string,
   item: string
 ): string {
-  const cleanComanda = (comanda || '00.000.000').trim();
-  const cleanData = (data || '00/00').trim();
-  const cleanHora = (hora || '00:00').trim();
+  const cleanComanda = (comanda || '00-000-000').trim().replace(/[^a-zA-Z0-9_-]/g, '-');
+  const cleanData = (data || '00-00').trim().replace(/[^a-zA-Z0-9_-]/g, '-');
+  const cleanHora = (hora || '00-00').trim().replace(/[^a-zA-Z0-9_-]/g, '-');
   const cleanItem = formatItemForDeterministicId(item);
 
-  return `pdf_${cleanComanda}_${cleanData}_${cleanHora}_${cleanItem}`;
+  return toFirestoreDocId(`pdf_${cleanComanda}_${cleanData}_${cleanHora}_${cleanItem}`);
 }
 
 /**
  * Gera ID determinístico baseado estritamente nos dados da linha extraída do PDF e no contador de ocorrências.
  * Formato padrão: ${baseId}_${occurrenceIndex}
- * Exemplo: pdf_13.402.402_05/10_15:03_UmaHoraDeBoliche_1
+ * Exemplo: pdf_13-536-039_05-10-2026_15-03_UmaHoraDeBoliche_1
  */
 export function generateDeterministicPdfId(
   comanda: string,
@@ -78,19 +94,28 @@ export function generateDeterministicPdfId(
   occurrenceIndex: number = 1
 ): string {
   const baseId = generateBaseDeterministicPdfId(comanda, data, hora, item);
-  return `${baseId}_${occurrenceIndex}`;
+  return toFirestoreDocId(`${baseId}_${occurrenceIndex}`);
 }
 
 /**
- * Remove a coluna "ADM" ("S" ou "N") do final da linha do relatório Volux.
- * No Volux, "S" ou "N" no final da linha indica apenas se a conta é ADM e NÃO indica cancelamento.
- * Esses caracteres são tratados apenas como texto irrelevante e descartados.
+ * Remove a coluna "ADM" ("/ N", "/ S", "S" ou "N") e códigos técnicos do final da linha do relatório Volux.
+ * No Volux, "S" ou "N" (ou "/ N", "/ S") no final da linha indica apenas se a conta é ADM e NÃO indica cancelamento.
  */
 export function stripTrailingAdmFlag(line: string): string {
   if (!line) return '';
   return line
-    .replace(/(?:\s+|\s*\|\s*)[SNsn](?:\s*\|\s*)?$/, '')
+    .replace(/(?:\s+|\s*[/|]\s*)[SNsn](?:\s*[/|]\s*)?$/, '')
     .trim();
+}
+
+/**
+ * Normaliza números de comanda pontuados que possam ter recebido espaço no PDF (ex: "13. 536. 039" -> "13.536.039")
+ */
+export function normalizeSpacedDottedComanda(line: string): string {
+  if (!line) return '';
+  return line
+    .replace(/\b(\d{1,3})\s*\.\s*(\d{3})\s*\.\s*(\d{3})\b/g, '$1.$2.$3')
+    .replace(/\b(\d{1,3})\s*\.\s*(\d{3})\b(?!\s*,\d{2})/g, '$1.$2');
 }
 
 /**
@@ -103,8 +128,57 @@ export function isLinhaCanceladaVolux(line: string): boolean {
   return /\b(?:CANCELADO|CANCELADA)\b/i.test(line);
 }
 
+export function isLinhaVoucherVolux(line: string): boolean {
+  if (!line || !line.trim()) return false;
+  return /\b(?:voucher|vale[- ]?brinde)\b/i.test(line);
+}
+
+export function isValidVoluxReportHeader(text: string): boolean {
+  if (!text || !text.trim()) return false;
+  return /comandas\s*x\s*itens|comandas\s+lan[cç]adas|comandas\s+canceladas|sistema\s+volux|relat[oó]rio|resumo\s+do\s+per[ií]odo|pdv/i.test(
+    text
+  );
+}
+
 /**
- * Catálogo Oficial de Itens Volux e Preços de Referência
+ * Extrai a Conta ADM ("3000" ou "3030") da linha do relatório PDF do Volux
+ * (seja como Espaço/Quarto 3000 ou 3030, ou Comanda 3000 ou 3030, onde ADM = S).
+ */
+export function extractContaAdmFromLine(
+  rawLine: string,
+  comandaCode?: string | null
+): '3000' | '3030' | null {
+  if (comandaCode) {
+    const cmdTrim = comandaCode.trim();
+    if (cmdTrim === '3000' || cmdTrim === '3030') {
+      return cmdTrim;
+    }
+  }
+  if (!rawLine) return null;
+  const withoutOsAndMoney = rawLine
+    .replace(/\bOS\s*[-:]?\s*\d+\b/gi, ' ')
+    .replace(MONEY_GLOBAL_REGEX, ' ')
+    .replace(/\b\d{1,3}(?:\.\d{3})+\b/g, ' ');
+  if (/\b3030\b/.test(withoutOsAndMoney)) return '3030';
+  if (/\b3000\b/.test(withoutOsAndMoney)) return '3000';
+  return null;
+}
+
+/**
+ * Identifica se a linha do relatório PDF pertence às Contas ADM 3000 ou 3030 (ADM = S).
+ */
+export function isLinhaConta3000(rawLine: string, comandaCode?: string | null): boolean {
+  return extractContaAdmFromLine(rawLine, comandaCode) !== null;
+}
+
+/**
+ * Catálogo Oficial de Itens Volux e Preços de Referência com os nomes comerciais limpos exatos:
+ * - "Meia Hora de Boliche"
+ * - "Uma Hora de Boliche"
+ * - "Ficha de Jogos Eletronicos"
+ * - "Mini Combo Fichas"
+ * - "Big Combo Fichas"
+ * - "Mega Combo Fichas"
  */
 export const CATALOGO_VOLUX = {
   boliche: [
@@ -147,11 +221,15 @@ export const CATALOGO_VOLUX = {
   ],
   fichas: [
     {
-      nome: 'Fichas Eletronicas',
+      nome: 'Ficha de Jogos Eletronicos',
       precoReferencia: 12.0,
       tipo: 'Fichas' as TipoVenda,
-      desc: 'Fichas individuais / R$ 12,00',
+      desc: '1 Ficha Prata + 0 Dourada / R$ 12,00',
       sinonimos: [
+        'ficha de jogos eletronicos',
+        'fichas de jogos eletronicos',
+        'ficha jogos eletronicos',
+        'fichas jogos eletronicos',
         'fichas eletronicas',
         'ficha eletronica',
         'fichas eletrônicas',
@@ -161,25 +239,46 @@ export const CATALOGO_VOLUX = {
       ],
     },
     {
-      nome: 'Mini Combo',
+      nome: 'Mini Combo Fichas',
       precoReferencia: 65.0,
       tipo: 'Fichas' as TipoVenda,
-      desc: '5 Fichas Eletronicas + 1 Dourada / R$ 65,00',
-      sinonimos: ['mini combo', 'mini-combo', 'mini combo 5 fichas', 'combo mini'],
+      desc: '5 Fichas Pratas + 1 Dourada / R$ 65,00',
+      sinonimos: [
+        'mini combo fichas',
+        'mini combo de fichas',
+        'mini combo',
+        'mini-combo',
+        'mini combo 5 fichas',
+        'combo mini',
+      ],
     },
     {
-      nome: 'Big Combo',
+      nome: 'Big Combo Fichas',
       precoReferencia: 120.0,
       tipo: 'Fichas' as TipoVenda,
-      desc: '10 Fichas Eletronicas + 2 Douradas / R$ 120,00',
-      sinonimos: ['big combo', 'big-combo', 'big combo 10 fichas', 'combo big'],
+      desc: '10 Fichas Pratas + 2 Douradas / R$ 120,00',
+      sinonimos: [
+        'big combo fichas',
+        'big combo de fichas',
+        'big combo',
+        'big-combo',
+        'big combo 10 fichas',
+        'combo big',
+      ],
     },
     {
-      nome: 'Mega Combo',
+      nome: 'Mega Combo Fichas',
       precoReferencia: 250.0,
       tipo: 'Fichas' as TipoVenda,
-      desc: '20 Fichas Eletronicas + 5 Douradas / R$ 250,00',
-      sinonimos: ['mega combo', 'mega-combo', 'mega combo 20 fichas', 'combo mega'],
+      desc: '20 Fichas Pratas + 5 Douradas / R$ 250,00',
+      sinonimos: [
+        'mega combo fichas',
+        'mega combo de fichas',
+        'mega combo',
+        'mega-combo',
+        'mega combo 20 fichas',
+        'combo mega',
+      ],
     },
   ],
 };
@@ -197,41 +296,79 @@ export function normalizeText(str: string): string {
 }
 
 /**
- * Identifica o Item Oficial e o Tipo de Venda baseado nas regras do catálogo
+ * Limpa códigos operacionais do Volux (ex: "OS2213", "boliche26", "ivolux6", "/ N", "/ S")
+ * deixando APENAS o nome comercial limpo do produto.
+ */
+export function cleanCommercialItemName(rawItem: string): string {
+  if (!rawItem) return '';
+  let cleaned = stripTrailingAdmFlag(rawItem);
+
+  // Remove códigos de OS (ex: OS2213, OS 2213, OS-2213), logins de terminal/operador (ex: boliche26, ivolux6, volux1) e flags "/ N" ou "/ S"
+  cleaned = cleaned
+    .replace(/\bOS\s*[-:]?\s*\d+\b/gi, ' ')
+    .replace(/\b(?:boliche\d+|ivolux\d*|volux\d*|pdv\d*|terminal\d*|caixa\d*)\b/gi, ' ')
+    .replace(/\b(?:voucher|vale[- ]?brinde)\b/gi, ' ')
+    .replace(/\b(?:3000|3030)\b/g, ' ')
+    .replace(/(?:^|\s)\/\s*[NSns]\b/g, ' ')
+    .replace(/(?:^|\s)[/|]\s*[NSns]\s*$/g, ' ')
+    .replace(/\b\d{1,3}(?:\.\d{3})+\b/g, ' ')
+    .replace(/\b\d{2}\/\d{2}(?:\/\d{2,4})?\b/g, ' ')
+    .replace(/\b\d{2}:\d{2}(?::\d{2})?\b/g, ' ')
+    .replace(/^[\s\-|:/.,]+|[\s\-|:/.,]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return stripTrailingAdmFlag(cleaned);
+}
+
+/**
+ * Identifica o Item Oficial e o Tipo de Venda baseado nas regras do catálogo,
+ * retornando SEMPRE apenas o nome comercial limpo do produto.
  */
 export function identificarItemECategoria(itemRaw: string): {
   itemOficial: string;
   tipoVenda: TipoVenda;
   precoReferencia?: number;
 } {
-  const norm = normalizeText(itemRaw);
+  const cleanedRaw = cleanCommercialItemName(itemRaw);
+  const norm = normalizeText(cleanedRaw || itemRaw);
 
-  // 1. Checa Boliche
+  // 1. Checa Boliche ("Meia Hora de Boliche", "Uma Hora de Boliche")
   for (const cat of CATALOGO_VOLUX.boliche) {
     if (cat.sinonimos.some((s) => norm.includes(normalizeText(s)))) {
       return { itemOficial: cat.nome, tipoVenda: 'Boliche', precoReferencia: cat.precoReferencia };
     }
   }
 
-  // 2. Checa Fichas (combos primeiro para evitar colisão com "fichas eletronicas")
-  const mega = CATALOGO_VOLUX.fichas.find((f) => f.nome === 'Mega Combo')!;
+  // 2. Checa Fichas (combos primeiro para evitar colisão com "ficha")
+  const mega = CATALOGO_VOLUX.fichas.find((f) => f.nome === 'Mega Combo Fichas')!;
   if (mega.sinonimos.some((s) => norm.includes(normalizeText(s)))) {
     return { itemOficial: mega.nome, tipoVenda: 'Fichas', precoReferencia: mega.precoReferencia };
   }
 
-  const big = CATALOGO_VOLUX.fichas.find((f) => f.nome === 'Big Combo')!;
+  const big = CATALOGO_VOLUX.fichas.find((f) => f.nome === 'Big Combo Fichas')!;
   if (big.sinonimos.some((s) => norm.includes(normalizeText(s)))) {
     return { itemOficial: big.nome, tipoVenda: 'Fichas', precoReferencia: big.precoReferencia };
   }
 
-  const mini = CATALOGO_VOLUX.fichas.find((f) => f.nome === 'Mini Combo')!;
+  const mini = CATALOGO_VOLUX.fichas.find((f) => f.nome === 'Mini Combo Fichas')!;
   if (mini.sinonimos.some((s) => norm.includes(normalizeText(s)))) {
     return { itemOficial: mini.nome, tipoVenda: 'Fichas', precoReferencia: mini.precoReferencia };
   }
 
-  const fichas = CATALOGO_VOLUX.fichas.find((f) => f.nome === 'Fichas Eletronicas')!;
+  const fichas = CATALOGO_VOLUX.fichas.find((f) => f.nome === 'Ficha de Jogos Eletronicos')!;
   if (fichas.sinonimos.some((s) => norm.includes(normalizeText(s)))) {
     return { itemOficial: fichas.nome, tipoVenda: 'Fichas', precoReferencia: fichas.precoReferencia };
+  }
+
+  // 3. Checa se é um produto do catálogo de Bebidas (AeB)
+  const catalogoAeBOrdenado = [...CATALOGO_AEB_PRODUTOS].sort(
+    (a, b) => b.nome.length - a.nome.length
+  );
+  for (const prod of catalogoAeBOrdenado) {
+    if (norm.includes(normalizeText(prod.nome))) {
+      return { itemOficial: prod.nome, tipoVenda: 'AeB', precoReferencia: prod.preco };
+    }
   }
 
   // Fallbacks contextuais se contiver termos-chave
@@ -242,14 +379,13 @@ export function identificarItemECategoria(itemRaw: string): {
     return { itemOficial: 'Uma Hora de Boliche', tipoVenda: 'Boliche', precoReferencia: 120.0 };
   }
 
-  if (norm.includes('ficha') || norm.includes('arcade') || norm.includes('eletronica')) {
-    return { itemOficial: 'Fichas Eletronicas', tipoVenda: 'Fichas', precoReferencia: 12.0 };
+  if (norm.includes('ficha') || norm.includes('arcade') || norm.includes('eletronica') || norm.includes('eletronicos')) {
+    return { itemOficial: 'Ficha de Jogos Eletronicos', tipoVenda: 'Fichas', precoReferencia: 12.0 };
   }
 
-  const ehBoliche = /boliche|pista|calçado|calcado/i.test(itemRaw);
-  const cleanItemName = stripTrailingAdmFlag(itemRaw.trim());
+  const ehBoliche = /boliche|pista|calçado|calcado/i.test(cleanedRaw);
   return {
-    itemOficial: cleanItemName || itemRaw.trim(),
+    itemOficial: cleanedRaw || 'Item Avulso',
     tipoVenda: ehBoliche ? 'Boliche' : 'Fichas',
   };
 }
@@ -264,7 +400,6 @@ export function parsePrecoVolux(precoRaw: string): number {
   const clean = precoRaw.replace(/[R$\s-]/gi, '').trim();
 
   let valor = 0;
-  // Se tiver vírgula como decimal (padrão brasileiro: "49,00", "-17,90" ou "3.035,00")
   if (clean.includes(',')) {
     const semMilhar = clean.replace(/\./g, '');
     const comPonto = semMilhar.replace(',', '.');
@@ -278,14 +413,89 @@ export function parsePrecoVolux(precoRaw: string): number {
 }
 
 /**
- * Formata data extraída para o padrão "DD/MM"
+ * Extrai o ano (YYYY) e a primeira data de referência do cabeçalho do relatório PDF Volux.
+ * Procura padrões como "Período: 05/10/2025", "Data: 15/11/2025", "Emissão: 06/10/2026" ou qualquer "DD/MM/YYYY" no texto.
  */
-export function formatDataVolux(dataRaw: string): string {
-  if (!dataRaw) return '05/10';
+export function extractHeaderDateContextFromVoluxText(text: string): {
+  headerYear: string;
+  headerFirstDate: string;
+} {
+  if (!text) {
+    return { headerYear: '', headerFirstDate: '' };
+  }
+
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const headerSlice = lines.slice(0, 35).join('\n');
+
+  // 1. Procura data completa com ano de 4 dígitos no cabeçalho (priorizando Período / Data / Referência)
+  const periodMatch = headerSlice.match(
+    /(?:per[ií]odo|data\s+de\s+refer[eê]ncia|data\s+movimento|movimento|data)\s*[:\-]?\s*(\d{1,2})\/(\d{1,2})\/(20\d{2})/i
+  );
+  if (periodMatch) {
+    const dd = periodMatch[1].padStart(2, '0');
+    const mm = periodMatch[2].padStart(2, '0');
+    const yyyy = periodMatch[3];
+    return { headerYear: yyyy, headerFirstDate: `${dd}/${mm}/${yyyy}` };
+  }
+
+  // 2. Qualquer data DD/MM/20YY no cabeçalho ou no documento
+  const fullDateMatch =
+    headerSlice.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/) ||
+    text.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+  if (fullDateMatch) {
+    const dd = fullDateMatch[1].padStart(2, '0');
+    const mm = fullDateMatch[2].padStart(2, '0');
+    const yyyy = fullDateMatch[3];
+    return { headerYear: yyyy, headerFirstDate: `${dd}/${mm}/${yyyy}` };
+  }
+
+  // 3. Data com ano de 2 dígitos no cabeçalho (ex: 15/11/25)
+  const shortYearMatch = headerSlice.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2})\b/);
+  if (shortYearMatch) {
+    const dd = shortYearMatch[1].padStart(2, '0');
+    const mm = shortYearMatch[2].padStart(2, '0');
+    const yyyy = `20${shortYearMatch[3]}`;
+    return { headerYear: yyyy, headerFirstDate: `${dd}/${mm}/${yyyy}` };
+  }
+
+  // 4. Ano de 4 dígitos isolado no cabeçalho (ex: "2025" ou "2026")
+  const yearOnlyMatch = headerSlice.match(/\b(202\d)\b/);
+  const headerYear = yearOnlyMatch ? yearOnlyMatch[1] : '';
+
+  // 5. Primeira data DD/MM encontrada no documento
+  const anyDDMMMatch = text.match(/\b(\d{2})\/(\d{2})\b/);
+  if (anyDDMMMatch) {
+    const dd = anyDDMMMatch[1];
+    const mm = anyDDMMMatch[2];
+    return {
+      headerYear,
+      headerFirstDate: headerYear ? `${dd}/${mm}/${headerYear}` : `${dd}/${mm}`,
+    };
+  }
+
+  return { headerYear, headerFirstDate: '' };
+}
+
+/**
+ * Formata a data extraída da linha do PDF ("DD/MM" ou "DD/MM/YYYY") combinada com o ano do cabeçalho,
+ * NUNCA substituindo pela data de hoje.
+ */
+export function formatDataVolux(dataRaw: string, headerYear?: string): string {
+  if (!dataRaw) return '';
   const clean = dataRaw.trim();
-  const match = clean.match(/(\d{2})\/(\d{2})(?:\/\d{2,4})?/);
+  const match = clean.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
   if (match) {
-    return `${match[1]}/${match[2]}`;
+    const dd = match[1].padStart(2, '0');
+    const mm = match[2].padStart(2, '0');
+    const rawYear = match[3];
+    if (rawYear) {
+      const yyyy = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+      return `${dd}/${mm}/${yyyy}`;
+    }
+    if (headerYear) {
+      return `${dd}/${mm}/${headerYear}`;
+    }
+    return `${dd}/${mm}`;
   }
   return clean;
 }
@@ -296,19 +506,27 @@ export function formatDataVolux(dataRaw: string): string {
 export function formatHoraVolux(horaRaw: string): string {
   if (!horaRaw) return '15:00';
   const clean = horaRaw.trim();
-  const match = clean.match(/(\d{2}:\d{2})(?::\d{2})?/);
+  const match = clean.match(/(\d{1,2}):(\d{2})(?::\d{2})?/);
   if (match) {
-    return match[1];
+    return `${match[1].padStart(2, '0')}:${match[2]}`;
   }
   return clean;
 }
 
 /**
- * Normaliza o ID da Comanda (suporta códigos alfanuméricos do Volux como "A8126" e numéricos como "13.402.402")
+ * Normaliza o ID da Comanda preservando números completos com pontos (ex: "13.536.039", "13.402.402")
+ * sem cortar no primeiro ponto.
  */
 export function formatComandaId(idRaw: string): string {
   if (!idRaw) return '';
-  const trimmed = idRaw.trim();
+  const trimmed = normalizeSpacedDottedComanda(idRaw.trim());
+
+  // Se já for pontuado (ex: "13.536.039" ou "1.234.567"), preserva todos os grupos com pontos!
+  const dottedMatch = trimmed.match(/^(\d{1,3}(?:\.\d{3})+)$/);
+  if (dottedMatch) {
+    return dottedMatch[1];
+  }
+
   const alphaMatch = trimmed.match(/^([A-Za-z]{1,3}\d{3,8})$/);
   if (alphaMatch) {
     return alphaMatch[1].toUpperCase();
@@ -316,7 +534,7 @@ export function formatComandaId(idRaw: string): string {
 
   const clean = trimmed.replace(/[^\d.]/g, '').trim();
   if (clean.includes('.')) {
-    return clean;
+    return clean.replace(/^\.+|\.+$/g, '');
   }
   if (clean.length === 8) {
     return `${clean.slice(0, 2)}.${clean.slice(2, 5)}.${clean.slice(5)}`;
@@ -328,34 +546,66 @@ export function formatComandaId(idRaw: string): string {
 }
 
 /**
- * Extrai o código da Comanda de uma linha do relatório Volux.
- * Suporta:
- * - Alfanumérico (ex: "A8126", "A8125", "B1020")
- * - Pontuado (ex: "13.402.402")
- * - Numérico de 6 a 9 dígitos ou numérico de 4 a 5 dígitos no início da linha
+ * Extrai o código completo da Comanda de uma linha do relatório Volux.
+ * - Captura o número completo da comanda com pontos (ex: "13.536.039"), sem cortar no primeiro ponto.
+ * - Ignora códigos de OS/produto ("OS2213") e logins ("boliche26", "ivolux6").
+ * - Suporta Data e Hora tanto na ordem "DD/MM HH:MM" quanto invertidas "HH:MM DD/MM".
  */
-export function extractComandaFromLine(line: string): string | null {
-  if (!line) return null;
-  const mainMatch = line.match(
-    /(?:Comanda[:\s#]*)?(\b[A-Za-z]{1,3}\d{3,8}\b|\b\d{1,3}\.\d{3}\.\d{3}\b|\b\d{6,9}\b)/i
+export function extractComandaFromLine(rawLine: string): string | null {
+  if (!rawLine) return null;
+  const line = normalizeSpacedDottedComanda(rawLine);
+
+  // 1. Prioridade Máxima: Número de comanda completo com pontos (ex: "13.536.039", "13.402.402", "1.234.567")
+  const dottedMatch = line.match(/(?:Comanda[:\s#]*)?\b(\d{1,3}(?:\.\d{3}){2}|\d{1,3}\.\d{3}\.\d{3})\b/i);
+  if (dottedMatch) {
+    return formatComandaId(dottedMatch[1]);
+  }
+
+  // 2. Número ou código no início da linha antes da data ou hora (ex: "3000  15/11", "3000  14:22", "A8126  06/10")
+  const startMatch = line.match(
+    /^\s*(?:Comanda[:\s#]*)?(\d{1,3}(?:\.\d{3})+|\d{4,9}|[A-Za-z]{1,3}\d{3,8})(?=\s)/i
   );
-  if (mainMatch) {
-    return formatComandaId(mainMatch[1]);
+  if (startMatch) {
+    const candidate = startMatch[1];
+    // Nunca confunde código de OS (OS2213) com comanda
+    if (!/^OS\d+$/i.test(candidate)) {
+      return formatComandaId(candidate);
+    }
   }
-  const startNumMatch = line.match(/^\s*(?:Comanda[:\s#]*)?(\d{4,5})(?=\s)/i);
-  if (startNumMatch) {
-    return formatComandaId(startNumMatch[1]);
+
+  // 3. Comanda imediatamente antes de uma data DD/MM ou horário HH:MM na linha (suporta data/hora invertidas)
+  const beforeDateOrTimeMatch = line.match(
+    /\b(\d{1,3}(?:\.\d{3})+|\d{4,9}|[A-Za-z]{1,3}\d{3,8})\b(?=\s+(?:\d{1,2}\/\d{2}|\d{1,2}:\d{2}))/
+  );
+  if (beforeDateOrTimeMatch) {
+    const candidate = beforeDateOrTimeMatch[1];
+    if (!/^OS\d+$/i.test(candidate)) {
+      return formatComandaId(candidate);
+    }
   }
+
+  // 4. Comanda alfanumérica ou de 6-9 dígitos (exceto códigos OS/boliche/ivolux e datas/preços)
+  const genericMatches = [
+    ...line.matchAll(/\b([A-Za-z]{1,3}\d{3,8}|\d{6,9})\b/g),
+  ];
+  for (const m of genericMatches) {
+    const token = m[1];
+    if (/^(?:OS|boliche|ivolux|volux|pdv)\d+$/i.test(token)) {
+      continue;
+    }
+    return formatComandaId(token);
+  }
+
   return null;
 }
 
 /**
  * Regex seguro para capturar valores monetários POSITIVOS e NEGATIVOS em formato brasileiro ou decimal.
  * Suporta valores negativos na coluna Total (ex: "-17,90", "-31,80", "R$ -17,90", "-R$ 17,90")
- * e separador de milhar (ex: "3.035,00") sem colidir com números de comanda ("13.402.402").
+ * e separador de milhar (ex: "3.035,00") sem colidir com números de comanda ("13.536.039").
  */
 const MONEY_GLOBAL_REGEX =
-  /(?<![0-9.])((?:-\s*R\$\s*|R\$\s*-\s*|-|R\$\s*)?(?:\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,6}[.,]\d{2}))(?![0-9.,])/g;
+  /(?<![0-9.])((?:-\s*R\$\s*|R\$\s*-\s*|-|R\$\s*)?(?:\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,6},\d{2}))(?![0-9.,])/g;
 
 /**
  * Extrai o "Valor Total Esperado" da seção de Resumo ou Rodapé do relatório PDF do Volux.
@@ -370,7 +620,7 @@ export function extractExpectedTotalFromVoluxText(text: string): number | null {
   let isReadingCancelledSection = false;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = normalizeSpacedDottedComanda(lines[i]);
     const norm = normalizeText(line);
 
     if (line === 'Comandas Canceladas' || /\bcomandas\s+canceladas\b/i.test(norm)) {
@@ -382,7 +632,6 @@ export function extractExpectedTotalFromVoluxText(text: string): number | null {
       continue;
     }
 
-    // Ignora linhas de subtotal de cancelados ou descontos isolados
     if (
       (norm.includes('cancelad') ||
         norm.includes('desconto') ||
@@ -394,26 +643,22 @@ export function extractExpectedTotalFromVoluxText(text: string): number | null {
       continue;
     }
 
-    // Ignora linhas que são itens normais de comanda
     const hasComandaAndTime =
-      Boolean(extractComandaFromLine(line)) && /\b\d{2}:\d{2}\b/.test(line);
+      Boolean(extractComandaFromLine(line)) && /\b\d{1,2}:\d{2}\b/.test(line);
     if (hasComandaAndTime && !norm.includes('total') && !norm.includes('resumo')) {
       continue;
     }
 
-    // 1. Alta prioridade: Total Líquido, Total Geral, Valor Total, Total do Relatório, Total Final, Total Esperado
     const isHighPriorityLabel =
       /(?:total\s+l[ií]quido|valor\s+l[ií]quido|total\s+geral|valor\s+total|total\s+do\s+relat[oó]rio|total\s+de\s+vendas|total\s+final|total\s+arrecadado|total\s+esperado|total\s+ativo)/i.test(
         line
       );
 
-    // 2. Prioridade padrão: Linha de Total / Resumo no final do arquivo
     const isGenericTotalLabel =
       /^(?:resumo|total|totais|soma\s+total|valor\s+do\s+per[ií]odo|totalizador)\b/i.test(line) ||
       /\b(?:total\s*:|total\s+r\$)/i.test(line);
 
     if (isHighPriorityLabel || isGenericTotalLabel) {
-      // Se for apenas um "Total:" genérico dentro da seção "Comandas Canceladas", ignora para não sobrescrever o total de lançadas
       if (isReadingCancelledSection && !isHighPriorityLabel) {
         continue;
       }
@@ -493,45 +738,42 @@ function findItemSliceInLine(
 }
 
 /**
- * Extrai a Quantidade (Qtde) e o Valor Unitário real de uma linha do relatório Volux.
- * - Se a quantidade for >= 2 (ex: A8126 com Qtde 6), garante que o valor retornado seja o valor UNITÁRIO
- *   de cada item, para que o loop insira N itens somando o valor exato da linha.
- * - Se a coluna Total possuir valor negativo (ex: -17,90 ou -31,80), preserva o sinal negativo em `precoUnitario`
- *   para acionar a regra de estorno.
+ * Extrai a Quantidade (Qtde), o Valor Unitário e o Valor Total real de uma linha do relatório Volux.
+ * Remove códigos como OS2213, boliche26, ivolux6 e "/ N" antes de analisar a quantidade.
  */
 export function extractQuantityAndUnitPrice(
   line: string,
   itemMatchText: string,
   precoReferencia?: number
-): { quantidade: number; precoUnitario: number } {
-  const lineWithoutAdm = stripTrailingAdmFlag(line);
-  const { beforeItemText, afterItemText } = findItemSliceInLine(lineWithoutAdm, itemMatchText);
+): { quantidade: number; precoUnitario: number; valorTotal?: number } {
+  const sanitizedLine = stripTrailingAdmFlag(normalizeSpacedDottedComanda(line))
+    .replace(/\bOS\s*[-:]?\s*\d+\b/gi, ' ')
+    .replace(/\b(?:boliche\d+|ivolux\d*|volux\d*|pdv\d*|terminal\d*|caixa\d*)\b/gi, ' ')
+    .replace(/(?:^|\s)\/\s*[NSns]\b/g, ' ');
 
-  // Remove eventuais datas/horas e códigos de comanda no trecho pós-item para não confundir com números
+  const { beforeItemText, afterItemText } = findItemSliceInLine(sanitizedLine, itemMatchText);
+
   const cleanAfterItem = stripTrailingAdmFlag(afterItemText)
-    .replace(/\b\d{2}\/\d{2}(?:\/\d{2,4})?\b/g, ' ')
-    .replace(/\b\d{2}:\d{2}(?::\d{2})?\b/g, ' ')
+    .replace(/\b\d{1,2}\/\d{2}(?:\/\d{2,4})?\b/g, ' ')
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
     .replace(/\b[A-Za-z]{1,3}\d{3,8}\b/g, ' ');
 
-  // Captura todos os valores com centavos (positivos ou negativos) no trecho após o item
   const afterMoneyMatches = [...cleanAfterItem.matchAll(MONEY_GLOBAL_REGEX)];
   let rawMoneyMatches = afterMoneyMatches.map((m) => parsePrecoVolux(m[1]));
   if (rawMoneyMatches.length === 0) {
-    rawMoneyMatches = [...lineWithoutAdm.matchAll(MONEY_GLOBAL_REGEX)].map((m) =>
+    rawMoneyMatches = [...sanitizedLine.matchAll(MONEY_GLOBAL_REGEX)].map((m) =>
       parsePrecoVolux(m[1])
     );
   }
 
   if (rawMoneyMatches.length === 0) {
-    return { quantidade: 1, precoUnitario: precoReferencia || 0 };
+    const fallback = precoReferencia || 0;
+    return { quantidade: 1, precoUnitario: fallback, valorTotal: fallback };
   }
 
-  // Identifica se a linha possui valor monetário negativo (ex: -17,90, -31,80)
   const hasNegativeValue = rawMoneyMatches.some((v) => v < 0);
-  // Trabalha com valores absolutos para cálculo preciso de razão/quantidade e aplica o sinal no retorno
   let prices = rawMoneyMatches.map((v) => Math.abs(v));
 
-  // Trecho entre o nome do item e o último preço da linha (onde a coluna Qtde fica posicionada)
   const lastMoneyMatch =
     afterMoneyMatches.length > 0 ? afterMoneyMatches[afterMoneyMatches.length - 1] : null;
   const textBeforeLastPrice =
@@ -539,8 +781,6 @@ export function extractQuantityAndUnitPrice(
       ? cleanAfterItem.slice(0, lastMoneyMatch.index)
       : cleanAfterItem;
 
-  // 1. Procura número inteiro isolado representando a coluna "Qtde" entre o Item e o Preço
-  // Ex: "Cerveja Heineken Lata   6   15,90   95,40" ou "Cerveja Heineken Lata   2   -31,80" -> captura 6 ou 2
   const segmentWithoutMoney = textBeforeLastPrice.replace(MONEY_GLOBAL_REGEX, ' ');
   const intMatchesBeforePrice = [...segmentWithoutMoney.matchAll(/(?:^|\s)(-?\d{1,3})(?=\s|$)/g)]
     .map((m) => Math.abs(parseInt(m[1], 10)))
@@ -550,22 +790,26 @@ export function extractQuantityAndUnitPrice(
   let foundExplicitQty = false;
 
   if (intMatchesBeforePrice.length > 0) {
-    // Se houver mais de um inteiro, prioriza aquele que multiplicado pelo preço unitário bate com o total,
-    // ou o último inteiro (imediatamente anterior à coluna de preço)
-    if (intMatchesBeforePrice.length > 1 && prices.length >= 2) {
+    if (prices.length >= 2) {
       const pLast = prices[prices.length - 1];
       const pPrev = prices[prices.length - 2];
       const matchingQty = intMatchesBeforePrice.find(
         (n) => Math.abs(n * pPrev - pLast) < 0.25
       );
-      quantidade =
-        matchingQty !== undefined
-          ? matchingQty
-          : intMatchesBeforePrice[intMatchesBeforePrice.length - 1];
+      if (matchingQty !== undefined) {
+        quantidade = matchingQty;
+        foundExplicitQty = true;
+      } else if (pPrev > 0 && Math.abs(pLast - pPrev) < 0.05) {
+        quantidade = 1;
+        foundExplicitQty = true;
+      } else {
+        quantidade = intMatchesBeforePrice[intMatchesBeforePrice.length - 1];
+        foundExplicitQty = true;
+      }
     } else {
       quantidade = intMatchesBeforePrice[intMatchesBeforePrice.length - 1];
+      foundExplicitQty = true;
     }
-    foundExplicitQty = true;
   }
 
   // 2. Caso a coluna Qtde venha formatada com casas decimais (ex: "6,00   15,90   95,40" ou "6,00   95,40")
@@ -586,7 +830,6 @@ export function extractQuantityAndUnitPrice(
   } else if (!foundExplicitQty && prices.length === 2) {
     const first = prices[0];
     const second = prices[1];
-    // Ex: "6,00   95,40" onde 6,00 é a quantidade e 95,40 é o preço total ou unitário
     const matchesRefTotal =
       Boolean(precoReferencia) && Math.abs(first * precoReferencia! - second) < 0.25;
     const isLikelyDecimalQty =
@@ -604,13 +847,13 @@ export function extractQuantityAndUnitPrice(
     }
   }
 
-  // 3. Caso a coluna Qtde esteja posicionada ANTES do nome do item (entre a Hora/Comanda e o Item)
+  // 3. Caso a coluna Qtde esteja posicionada ANTES do nome do item
   if (!foundExplicitQty && beforeItemText) {
     const cleanBefore = beforeItemText
-      .replace(/\b\d{2}\/\d{2}(?:\/\d{2,4})?\b/g, ' ')
-      .replace(/\b\d{2}:\d{2}(?::\d{2})?\b/g, ' ')
+      .replace(/\b\d{1,2}\/\d{2}(?:\/\d{2,4})?\b/g, ' ')
+      .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
       .replace(/\b[A-Za-z]{1,3}\d{3,8}\b/g, ' ')
-      .replace(/\b\d{1,3}\.\d{3}\.\d{3}\b/g, ' ')
+      .replace(/\b\d{1,3}(?:\.\d{3})+\b/g, ' ')
       .replace(/\b\d{4,9}\b/g, ' ');
     const intBefore = [...cleanBefore.matchAll(/(?:^|\s)(-?\d{1,2})(?=\s|$)/g)]
       .map((m) => Math.abs(parseInt(m[1], 10)))
@@ -621,7 +864,7 @@ export function extractQuantityAndUnitPrice(
     }
   }
 
-  // 4. Se não encontrou inteiro explícito, mas há 2 preços (Unitário e Total) onde Total é múltiplo exato >= 2 do Unitário
+  // 4. Se não encontrou inteiro explícito, mas há 2 preços (Unitário e Total)
   if (!foundExplicitQty && prices.length >= 2) {
     const pLast = prices[prices.length - 1];
     const pPrev = prices[prices.length - 2];
@@ -642,43 +885,61 @@ export function extractQuantityAndUnitPrice(
 
   const applySign = (val: number) => (hasNegativeValue ? -Math.abs(val) : Math.abs(val));
 
-  // Determina o Valor Unitário exato
   if (quantidade <= 1) {
-    const precoUnitario = prices[prices.length - 1];
-    return { quantidade: 1, precoUnitario: applySign(precoUnitario) };
+    const precoFinal = prices[prices.length - 1];
+    return {
+      quantidade: 1,
+      precoUnitario: applySign(precoFinal),
+      valorTotal: applySign(precoFinal),
+    };
   }
 
-  // Quando quantidade >= 2:
   if (prices.length >= 2) {
     const pLast = prices[prices.length - 1];
     const pPrev = prices[prices.length - 2];
 
-    // Se a última coluna for o Total da Linha (pPrev * quantidade == pLast, ex: 6 | 15,90 | 95,40 ou 2 | 15,90 | -31,80)
     if (Math.abs(pPrev * quantidade - pLast) < 0.25) {
-      return { quantidade, precoUnitario: applySign(pPrev) };
+      return {
+        quantidade,
+        precoUnitario: applySign(pPrev),
+        valorTotal: applySign(pLast),
+      };
     }
 
-    // Se a última coluna for um total com desconto e pPrev for o preço de tabela (ex: 2 | 70,00 | 110,00 -> 2 de 55,00)
     if (
       (precoReferencia && pLast > precoReferencia * 1.15 && Math.abs(pPrev - precoReferencia) < 0.25) ||
       pLast > pPrev * 1.2
     ) {
-      return { quantidade, precoUnitario: applySign(Number((pLast / quantidade).toFixed(2))) };
+      return {
+        quantidade,
+        precoUnitario: applySign(Number((pLast / quantidade).toFixed(2))),
+        valorTotal: applySign(pLast),
+      };
     }
 
-    // Caso contrário, pLast já é o próprio Valor Unitário
-    return { quantidade, precoUnitario: applySign(pLast) };
+    const totalCalc = Number((pLast * quantidade).toFixed(2));
+    return {
+      quantidade,
+      precoUnitario: applySign(pLast),
+      valorTotal: applySign(totalCalc),
+    };
   }
 
-  // Apenas 1 preço na linha (prices.length === 1, ex: coluna Total "95,40" para Qtde 6, ou "-31,80" para Qtde 2)
   const pOnly = prices[0];
   if (precoReferencia && Math.abs(pOnly - precoReferencia) < 0.05) {
-    // Se o preço único já é exatamente o preço unitário de referência
-    return { quantidade, precoUnitario: applySign(pOnly) };
+    const totalCalc = Number((pOnly * quantidade).toFixed(2));
+    return {
+      quantidade,
+      precoUnitario: applySign(pOnly),
+      valorTotal: applySign(totalCalc),
+    };
   }
 
-  // Quando há apenas a coluna Total na linha do PDF e Qtde >= 2, divide o Total pela quantidade para obter o unitário
-  return { quantidade, precoUnitario: applySign(Number((pOnly / quantidade).toFixed(2))) };
+  return {
+    quantidade,
+    precoUnitario: applySign(Number((pOnly / quantidade).toFixed(2))),
+    valorTotal: applySign(pOnly),
+  };
 }
 
 export interface VoluxReconciliationResult {
@@ -688,6 +949,7 @@ export interface VoluxReconciliationResult {
   hasDiscrepancy: boolean;
   diferenca: number;
   unmatchedLines: string[];
+  isEmptyReport?: boolean;
 }
 
 export interface VoluxAeBReconciliationResult {
@@ -697,17 +959,20 @@ export interface VoluxAeBReconciliationResult {
   hasDiscrepancy: boolean;
   diferenca: number;
   unmatchedLines: string[];
+  isEmptyReport?: boolean;
 }
 
 /**
  * Divide uma linha caso o PDF tenha concatenado duas comandas na mesma linha horizontal
+ * (Suporta data DD/MM ou hora HH:MM logo após o número da comanda)
  */
 function splitMergedComandaLines(rawLines: string[]): string[] {
   const result: string[] = [];
   const multiComandaPattern =
-    /(?=(\b(?:[A-Za-z]{1,3}\d{3,8}|\d{1,3}\.\d{3}\.\d{3})\b\s+\d{2}\/\d{2}))/g;
+    /(?=(\b(?:\d{1,3}(?:\.\d{3}){2}|[A-NP-Za-np-z]\d{3,8})\b\s+(?:\d{1,2}\/\d{2}|\d{1,2}:\d{2})))/g;
 
-  for (const line of rawLines) {
+  for (const rawLine of rawLines) {
+    const line = normalizeSpacedDottedComanda(rawLine);
     const matches = [...line.matchAll(multiComandaPattern)];
     if (matches.length > 1) {
       let lastIdx = 0;
@@ -725,8 +990,8 @@ function splitMergedComandaLines(rawLines: string[]): string[] {
 }
 
 /**
- * Extrai posicionalmente o nome do item a partir do trecho anterior ao primeiro preço,
- * removendo comanda, datas, horários, quantidade isolada e flags ADM.
+ * Extrai posicionalmente o nome comercial limpo do item a partir do trecho anterior ao primeiro preço,
+ * removendo comanda, datas, horários, códigos (OS2213, boliche26, ivolux6), quantidade isolada e flags ADM (/ N).
  */
 function extractPositionalItemName(
   cleanLine: string,
@@ -743,25 +1008,28 @@ function extractPositionalItemName(
   }
 
   segment = segment
-    .replace(/(?:Comanda[:\s#]*)?\b(?:[A-Za-z]{1,3}\d{3,8}|\d{1,3}\.\d{3}\.\d{3}|\d{6,9})\b/gi, ' ')
-    .replace(/\b\d{2}\/\d{2}(?:\/\d{2,4})?\b/g, ' ')
-    .replace(/\b\d{2}:\d{2}(?::\d{2})?\b/g, ' ')
-    .replace(/\s+-?\d{1,3}\s*$/, ' ') // remove coluna Qtde no final do nome do item
-    .replace(/^\s*-?\d{1,3}\s+/, ' ') // remove coluna Qtde se estiver no início
+    .replace(/(?:Comanda[:\s#]*)?\b(?:\d{1,3}(?:\.\d{3})+|[A-Za-z]{1,3}\d{3,8}|\d{4,9})\b/gi, ' ')
+    .replace(/\b\d{1,2}\/\d{2}(?:\/\d{2,4})?\b/g, ' ')
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
+    .replace(/\bOS\s*[-:]?\s*\d+\b/gi, ' ')
+    .replace(/\b(?:boliche\d+|ivolux\d*|volux\d*|pdv\d*|terminal\d*|caixa\d*)\b/gi, ' ')
+    .replace(/\s+-?\d{1,3}\s*$/, ' ')
+    .replace(/^\s*-?\d{1,3}\s+/, ' ')
     .replace(/[-|:]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
-  return stripTrailingAdmFlag(segment);
+  return cleanCommercialItemName(segment);
 }
 
 /**
  * Parser completo com Sistema de Conciliação e Auditoria para Comandas (Boliche & Fichas)
  * Implementa:
- * 1. Identificação estrutural de seções ("Comandas lançadas" vs "Comandas Canceladas" via isReadingCancelledSection)
- * 2. Captura de valores monetários negativos na coluna Total (ex: -17,90, -31,80)
- * 3. Limpeza da falsa flag "ADM" ("S" ou "N" no final da linha)
- * 4. Multiplicação de itens com Qtde >= 2 (ex: A8126 com quantidade 6) via .push() múltiplo
+ * 1. Parada imediata na seção "Resumo do Período" (evita duplicar linhas de resumo da pág. 2)
+ * 2. Extração da data real (DD/MM) e hora (HH:MM) mesmo quando invertidas na linha
+ * 3. Captura completa do número da comanda com pontos (ex: 13.536.039)
+ * 4. Limpeza total do nome comercial do produto (removendo OS2213, boliche26, ivolux6, / N)
+ * 5. Leitura da conta 3000 marcando isCortesia: true com o valor real do PDF e suporte a Voucher
  */
 export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliationResult {
   const vendas: VendaComanda[] = [];
@@ -775,10 +1043,12 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
       hasDiscrepancy: false,
       diferenca: 0,
       unmatchedLines,
+      isEmptyReport: false,
     };
   }
 
-  // Mapa de controle temporário para contar ocorrências de IDs idênticos por seção
+  const { headerYear, headerFirstDate } = extractHeaderDateContextFromVoluxText(text);
+
   const launchedOccurrences: Record<string, number> = {};
   const cancelledOccurrences: Record<string, number> = {};
 
@@ -795,20 +1065,29 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
   const lines = splitMergedComandaLines(rawLines);
 
   let lastComanda = '';
-  let lastData = '05/10';
+  let lastContaAdm: '3000' | '3030' | null = null;
+  let pendingHeaderContaAdm: '3000' | '3030' | null = null;
+  let lastData = headerFirstDate || (headerYear ? `05/10/${headerYear}` : '05/10');
   let lastHora = '15:00';
   let inSummarySection = false;
-  // 1. Flag estrutural de leitura da seção "Comandas Canceladas"
   let isReadingCancelledSection = false;
 
   let totalLancado = 0;
   let totalCanceladoPdf = 0;
 
   for (const rawLine of lines) {
-    const trimmedRaw = rawLine.trim();
+    const trimmedRaw = normalizeSpacedDottedComanda(rawLine.trim());
     const normRaw = normalizeText(trimmedRaw);
 
-    // 1. Identificação Estrutural de Cancelamentos ("Comandas lançadas" vs "Comandas Canceladas")
+    // PARADA IMEDIATA NO "Resumo do Período": nunca lê nem duplica linhas da seção de resumo
+    if (
+      /\bresumo\s+do\s+periodo\b/i.test(normRaw) ||
+      /^resumo\s+do\s+relatorio\b/i.test(normRaw) ||
+      /^fim\s+do\s+relatorio\b/i.test(normRaw)
+    ) {
+      break;
+    }
+
     if (
       trimmedRaw === 'Comandas Canceladas' ||
       /^comandas\s+canceladas\b/i.test(trimmedRaw) ||
@@ -817,6 +1096,8 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
       isReadingCancelledSection = true;
       inSummarySection = false;
       lastComanda = '';
+      lastContaAdm = null;
+      pendingHeaderContaAdm = null;
       continue;
     }
 
@@ -828,16 +1109,24 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
       isReadingCancelledSection = false;
       inSummarySection = false;
       lastComanda = '';
+      lastContaAdm = null;
+      pendingHeaderContaAdm = null;
       continue;
     }
 
-    // 4. Limpeza da Falsa Flag "ADM" ("S" ou "N" no final da linha)
     const line = stripTrailingAdmFlag(trimmedRaw);
     const normLine = normalizeText(line);
 
-    // Detecta início de bloco de Resumo/Totalizador no rodapé
     if (
-      /^(?:resumo|total\s+geral|total\s+por\s+produto|total\s+por\s+item|totalizador|fim\s+do\s+relatorio)/i.test(
+      /\bresumo\s+do\s+periodo\b/i.test(normLine) ||
+      /^resumo\s+do\s+relatorio\b/i.test(normLine) ||
+      /^fim\s+do\s+relatorio\b/i.test(normLine)
+    ) {
+      break;
+    }
+
+    if (
+      /^(?:resumo|total\s+geral|total\s+por\s+produto|total\s+por\s+item|totalizador)/i.test(
         normLine
       )
     ) {
@@ -845,26 +1134,31 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
       continue;
     }
 
-    // Ignora cabeçalhos de tabela e divisores
     if (
       /^[-=_*]{4,}$/.test(line) ||
       (/comanda/i.test(line) && /item|produto|descri/i.test(line) && /pre[cç]o|valor|total/i.test(line)) ||
-      /^(?:sistema\s+volux|unidade:|filtro:|pagina\s+\d)/i.test(normLine)
+      /^(?:sistema\s+volux|unidade:|filtro:|pagina\s+\d|per[ií]odo:|data\s+emiss|comandas\s*x\s*itens)/i.test(normLine)
     ) {
       continue;
     }
 
     const comandaExtracted = extractComandaFromLine(line);
-    const dataMatch = line.match(/\b(\d{2}\/\d{2}(?:\/\d{2,4})?)\b/);
-    const horaMatch = line.match(/\b(\d{2}:\d{2}(?::\d{2})?)\b/);
+    const lineContaAdm = extractContaAdmFromLine(trimmedRaw, comandaExtracted);
+    const hasExplicitAdmNo = /(?:\s+|\s*[/|]\s*)[Nn](?:\s*[/|]\s*)?$/.test(trimmedRaw);
+    const hasExplicitAdmYes = /(?:\s+|\s*[/|]\s*)[Ss](?:\s*[/|]\s*)?$/.test(trimmedRaw);
+
+    // Captura DD/MM e HH:MM independentemente da ordem na linha ("16/11 10:49" ou "14:22 16/11")
+    const dataMatch = line.match(/\b(\d{1,2}\/\d{2}(?:\/\d{2,4})?)\b/);
+    const horaMatch = line.match(/\b(\d{1,2}:\d{2}(?::\d{2})?)\b/);
     const precoMatches = [...line.matchAll(MONEY_GLOBAL_REGEX)];
 
+    const previousComanda = lastComanda;
     if (comandaExtracted) {
       lastComanda = comandaExtracted;
       inSummarySection = false;
     }
     if (dataMatch) {
-      lastData = formatDataVolux(dataMatch[1]);
+      lastData = formatDataVolux(dataMatch[1], headerYear);
     }
     if (horaMatch) {
       lastHora = formatHoraVolux(horaMatch[1]);
@@ -910,76 +1204,127 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
     ) {
       const { itemOficial, tipoVenda, precoReferencia } = identificarItemECategoria(matchedItemText);
       const comandaCode = comandaExtracted || lastComanda;
-      const dataStr = dataMatch ? formatDataVolux(dataMatch[1]) : lastData;
+      const dataStr = dataMatch ? formatDataVolux(dataMatch[1], headerYear) : lastData;
       const horaStr = horaMatch ? formatHoraVolux(horaMatch[1]) : lastHora;
 
-      const { quantidade, precoUnitario } = extractQuantityAndUnitPrice(
+      const { quantidade, precoUnitario, valorTotal } = extractQuantityAndUnitPrice(
         line,
         matchedItemText,
         precoReferencia
       );
 
-      // Cancelamento determinado ESTRITAMENTE pela seção "Comandas Canceladas", valor negativo ou palavra explícita CANCELADO
       const isCancelado =
         isReadingCancelledSection || precoUnitario < 0 || isLinhaCanceladaVolux(line);
 
+      // Regra Contas ADM 3000 e 3030 (extraída da linha ou herdada da linha anterior) e Regra de Voucher
+      let contaAdmCode: '3000' | '3030' | null = null;
+      if (lineContaAdm) {
+        contaAdmCode = lineContaAdm;
+        lastContaAdm = lineContaAdm;
+      } else if (pendingHeaderContaAdm && !hasExplicitAdmNo) {
+        contaAdmCode = pendingHeaderContaAdm;
+        lastContaAdm = pendingHeaderContaAdm;
+      } else if (
+        lastContaAdm &&
+        !hasExplicitAdmNo &&
+        (!comandaExtracted || comandaExtracted === previousComanda || hasExplicitAdmYes)
+      ) {
+        contaAdmCode = lastContaAdm;
+      } else {
+        lastContaAdm = null;
+      }
+      pendingHeaderContaAdm = null;
+
+      const isContaAdm = contaAdmCode !== null;
+      const isVoucher = !isCancelado && !isContaAdm && isLinhaVoucherVolux(trimmedRaw);
+
       const precoAbsoluto = Math.abs(precoUnitario);
-      const precoEfetivo = isCancelado ? 0 : precoAbsoluto;
+      const valorTotalLinha =
+        valorTotal !== undefined
+          ? Math.abs(valorTotal)
+          : Number((precoAbsoluto * quantidade).toFixed(2));
 
       if (isCancelado) {
-        totalCanceladoPdf = Number((totalCanceladoPdf + precoAbsoluto * quantidade).toFixed(2));
+        totalCanceladoPdf = Number((totalCanceladoPdf + valorTotalLinha).toFixed(2));
       } else {
-        totalLancado = Number((totalLancado + precoAbsoluto * quantidade).toFixed(2));
+        totalLancado = Number((totalLancado + valorTotalLinha).toFixed(2));
       }
 
       const occMap = isCancelado ? cancelledOccurrences : launchedOccurrences;
+      const baseId = generateBaseDeterministicPdfId(comandaCode, dataStr, horaStr, itemOficial);
 
-      // REGRA DE QUANTIDADE (Qtde >= 2, ex: A8126 com Qtde 6): Faz loop inserindo N vezes cada unidade
-      for (let q = 0; q < quantidade; q++) {
-        const baseId = generateBaseDeterministicPdfId(comandaCode, dataStr, horaStr, itemOficial);
-        occMap[baseId] = (occMap[baseId] || 0) + 1;
-        const idDeterministico = `${baseId}_${occMap[baseId]}`;
+      // Mantém a venda agrupada na mesma linha (1 registro por linha do PDF com qtde e valorTotalLinha)
+      occMap[baseId] = (occMap[baseId] || 0) + 1;
+      const idDeterministico = `${baseId}_${occMap[baseId]}`;
+      const precoEfetivoLinha = isCancelado ? -valorTotalLinha : valorTotalLinha;
 
-        vendas.push({
-          id: idDeterministico,
-          comanda: comandaCode,
-          data: dataStr,
-          hora: horaStr,
-          tipo_venda: tipoVenda,
-          item: itemOficial,
-          preco: precoEfetivo,
-          responsavel: '',
-          cancelado: isCancelado,
-          status: isCancelado ? 'Cancelado' : 'Ativo',
-        });
+      vendas.push({
+        id: idDeterministico,
+        pdfId: idDeterministico,
+        origem: 'PDF',
+        comanda: comandaCode,
+        data: dataStr,
+        hora: horaStr,
+        tipo_venda: tipoVenda,
+        item: itemOficial,
+        qtde: quantidade,
+        preco: precoEfetivoLinha,
+        responsavel: '',
+        cancelado: isCancelado,
+        status: isCancelado ? 'Cancelado' : 'Ativo',
+        ...(contaAdmCode
+          ? {
+              conta3000: true,
+              contaAdm: contaAdmCode,
+              espaco: contaAdmCode,
+              isCortesia: true,
+              motivoOperacional: 'Cortesia',
+            }
+          : isVoucher
+            ? {
+                isVoucher: true,
+                motivoOperacional: 'Voucher',
+              }
+            : {}),
+      });
+    } else {
+      if (lineContaAdm) {
+        pendingHeaderContaAdm = lineContaAdm;
+        lastContaAdm = lineContaAdm;
+      } else if (comandaExtracted && hasExplicitAdmNo) {
+        pendingHeaderContaAdm = null;
+        lastContaAdm = null;
       }
-    } else if (precoMatches.length > 0 && !isTotalLine) {
-      unmatchedLines.push(line);
+      if (precoMatches.length > 0 && !isTotalLine) {
+        unmatchedLines.push(line);
+      }
     }
   }
 
-  // =========================================================================
-  // ESTRATÉGIA 2 (Fallback Multilinha): Caso pdfjs tenha quebrado cada coluna em uma linha separada
-  // =========================================================================
+  // ESTRATÉGIA 2 (Fallback Multilinha - truncado antes de "Resumo do Período")
   if (vendas.length === 0) {
-    const blockPattern =
-      /(?:Comanda[:\s#]*)?(\b[A-Za-z]{1,3}\d{3,8}\b|\b\d{1,3}\.\d{3}\.\d{3}\b|\b\d{6,9}\b)[\s\S]{1,120}?(\d{2}\/\d{2}(?:\/\d{2,4})?)[\s\S]{1,80}?(\d{2}:\d{2}(?::\d{2})?)[\s\S]{1,120}?(Meia Hora de Boliche|Uma Hora de Boliche|Mega Combo|Big Combo|Mini Combo|Fichas? Eletr[oô]nicas?)([\s\S]{1,80}?)(?:R\$\s*)?(-?(?:\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,6}[.,]\d{2}))/gi;
+    const textBeforeSummary =
+      text.split(/resumo\s+do\s+per[ií]odo|resumo\s+do\s+relat[oó]rio|fim\s+do\s+relat[oó]rio/i)[0] ||
+      text;
 
-    const cancelledHeaderIdx = text.search(/\bComandas\s+Canceladas\b/i);
+    const blockPattern =
+      /(?:Comanda[:\s#]*)?(\b\d{1,3}(?:\.\d{3}){2}\b|\b[A-NP-Za-np-z]\d{3,8}\b|\b\d{4,9}\b)[\s\S]{1,120}?(?:(\d{1,2}\/\d{2}(?:\/\d{2,4})?)[\s\S]{1,80}?(\d{1,2}:\d{2}(?::\d{2})?)|(\d{1,2}:\d{2}(?::\d{2})?)[\s\S]{1,80}?(\d{1,2}\/\d{2}(?:\/\d{2,4})?))[\s\S]{1,120}?(Meia Hora de Boliche|Uma Hora de Boliche|Mega Combo(?:\s+Fichas)?|Big Combo(?:\s+Fichas)?|Mini Combo(?:\s+Fichas)?|Fichas?\s+(?:de\s+Jogos\s+)?Eletr[oô]nic[ao]s?)([\s\S]{1,80}?)(?:R\$\s*)?(-?(?:\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,6},\d{2}))/gi;
+
+    const cancelledHeaderIdx = textBeforeSummary.search(/\bComandas\s+Canceladas\b/i);
     let match: RegExpExecArray | null;
-    while ((match = blockPattern.exec(text)) !== null) {
+    while ((match = blockPattern.exec(textBeforeSummary)) !== null) {
       const comandaRaw = match[1];
-      const dataRaw = match[2];
-      const horaRaw = match[3];
-      const itemRaw = match[4];
+      const dataRaw = match[2] || match[5];
+      const horaRaw = match[3] || match[4];
+      const itemRaw = match[6];
       const fullSnippet = stripTrailingAdmFlag(match[0]);
 
       const { itemOficial, tipoVenda, precoReferencia } = identificarItemECategoria(itemRaw);
       const comandaCode = formatComandaId(comandaRaw);
-      const dataStr = formatDataVolux(dataRaw);
+      const dataStr = formatDataVolux(dataRaw, headerYear);
       const horaStr = formatHoraVolux(horaRaw);
 
-      const { quantidade, precoUnitario } = extractQuantityAndUnitPrice(
+      const { quantidade, precoUnitario, valorTotal } = extractQuantityAndUnitPrice(
         fullSnippet,
         itemRaw,
         precoReferencia
@@ -989,40 +1334,59 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
         cancelledHeaderIdx !== -1 && (match.index || 0) >= cancelledHeaderIdx;
       const isCancelado =
         inCancelledPart || precoUnitario < 0 || isLinhaCanceladaVolux(fullSnippet);
+      const contaAdmCode = extractContaAdmFromLine(match[0], comandaCode);
+      const isVoucher = !isCancelado && !contaAdmCode && isLinhaVoucherVolux(match[0]);
       const precoAbsoluto = Math.abs(precoUnitario);
-      const precoEfetivo = isCancelado ? 0 : precoAbsoluto;
+      const valorTotalLinha =
+        valorTotal !== undefined
+          ? Math.abs(valorTotal)
+          : Number((precoAbsoluto * quantidade).toFixed(2));
 
       if (isCancelado) {
-        totalCanceladoPdf = Number((totalCanceladoPdf + precoAbsoluto * quantidade).toFixed(2));
+        totalCanceladoPdf = Number((totalCanceladoPdf + valorTotalLinha).toFixed(2));
       } else {
-        totalLancado = Number((totalLancado + precoAbsoluto * quantidade).toFixed(2));
+        totalLancado = Number((totalLancado + valorTotalLinha).toFixed(2));
       }
 
       const occMap = isCancelado ? cancelledOccurrences : launchedOccurrences;
+      const baseId = generateBaseDeterministicPdfId(comandaCode, dataStr, horaStr, itemOficial);
 
-      for (let q = 0; q < quantidade; q++) {
-        const baseId = generateBaseDeterministicPdfId(comandaCode, dataStr, horaStr, itemOficial);
-        occMap[baseId] = (occMap[baseId] || 0) + 1;
-        const idDeterministico = `${baseId}_${occMap[baseId]}`;
+      occMap[baseId] = (occMap[baseId] || 0) + 1;
+      const idDeterministico = `${baseId}_${occMap[baseId]}`;
+      const precoEfetivoLinha = isCancelado ? -valorTotalLinha : valorTotalLinha;
 
-        vendas.push({
-          id: idDeterministico,
-          comanda: comandaCode,
-          data: dataStr,
-          hora: horaStr,
-          tipo_venda: tipoVenda,
-          item: itemOficial,
-          preco: precoEfetivo,
-          responsavel: '',
-          cancelado: isCancelado,
-          status: isCancelado ? 'Cancelado' : 'Ativo',
-        });
-      }
+      vendas.push({
+        id: idDeterministico,
+        pdfId: idDeterministico,
+        origem: 'PDF',
+        comanda: comandaCode,
+        data: dataStr,
+        hora: horaStr,
+        tipo_venda: tipoVenda,
+        item: itemOficial,
+        qtde: quantidade,
+        preco: precoEfetivoLinha,
+        responsavel: '',
+        cancelado: isCancelado,
+        status: isCancelado ? 'Cancelado' : 'Ativo',
+        ...(contaAdmCode
+          ? {
+              conta3000: true,
+              contaAdm: contaAdmCode,
+              espaco: contaAdmCode,
+              isCortesia: true,
+              motivoOperacional: 'Cortesia',
+            }
+          : isVoucher
+            ? {
+                isVoucher: true,
+                motivoOperacional: 'Voucher',
+              }
+            : {}),
+      });
     }
   }
 
-  // Cálculo de Conciliação Financeira
-  // Considera tanto o Total Lançado quanto o Total Líquido (Lançado - Cancelado no PDF)
   const totalLiquidoPdf = Number(Math.max(0, totalLancado - totalCanceladoPdf).toFixed(2));
   const totalEsperado = extractExpectedTotalFromVoluxText(text);
 
@@ -1042,45 +1406,8 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
 
   const diferenca =
     totalEsperado !== null ? Number(Math.abs(totalEsperado - totalExtraido).toFixed(2)) : 0;
-  // Validação de conciliação: if (totalExtraido !== totalEsperado)
   const hasDiscrepancy =
     totalEsperado !== null && totalExtraido !== totalEsperado && diferenca > 0.05;
-
-  // Log Detalhado no console para Auditoria do Desenvolvedor
-  console.log('================================================================');
-  console.log('[VOLUX AUDITORIA & CONCILIAÇÃO - COMANDAS / BOLICHE / FICHAS]');
-  console.log(`Total de Registros Extraídos: ${vendas.length}`);
-  console.log(`Total Comandas Lançadas: R$ ${totalLancado.toFixed(2)}`);
-  console.log(`Total Comandas Canceladas (Estornos no PDF): R$ ${totalCanceladoPdf.toFixed(2)}`);
-  console.log(`Valor Total Extraído (Conciliado): R$ ${totalExtraido.toFixed(2)}`);
-  console.log(
-    `Valor Total Esperado (Rodapé PDF): ${
-      totalEsperado !== null ? `R$ ${totalEsperado.toFixed(2)}` : 'Não informado no rodapé'
-    }`
-  );
-  if (hasDiscrepancy) {
-    console.warn(
-      `⚠️ DISCREPÂNCIA DETECTADA! Esperado: R$ ${totalEsperado?.toFixed(2)} | Extraído: R$ ${totalExtraido.toFixed(2)} | Diferença: R$ ${diferenca.toFixed(2)}`
-    );
-  }
-  if (typeof console.table === 'function' && vendas.length > 0) {
-    console.table(
-      vendas.map((v, i) => ({
-        '#': i + 1,
-        Comanda: v.comanda,
-        Data: v.data,
-        Hora: v.hora,
-        Item: v.item,
-        'Preço (R$)': v.preco,
-        Status: v.cancelado ? 'Cancelado (Estorno)' : 'Ativo',
-        ID: v.id,
-      }))
-    );
-  }
-  if (unmatchedLines.length > 0) {
-    console.log('Linhas com valores não associadas a vendas (para conferência):', unmatchedLines);
-  }
-  console.log('================================================================');
 
   return {
     vendas,
@@ -1089,6 +1416,7 @@ export function parseVoluxTextWithReconciliation(text: string): VoluxReconciliat
     hasDiscrepancy,
     diferenca,
     unmatchedLines,
+    isEmptyReport: vendas.length === 0 && isValidVoluxReportHeader(text),
   };
 }
 
@@ -1102,7 +1430,7 @@ export function parseVoluxText(text: string): VendaComanda[] {
 /**
  * Extrai texto completo de um arquivo PDF utilizando pdfjs-dist.
  * Agrupa fragmentos por coordenada vertical (Y) com tolerância fina (3pt) e ordena
- * horizontalmente (X) da esquerda para a direita para evitar fusão ou embaralhamento de linhas.
+ * horizontalmente (X) da esquerda para a direita, preservando comandas pontuadas completas (ex: 13.536.039).
  */
 export async function extractTextFromPdf(file: File): Promise<string> {
   const arrayBuffer = await file.arrayBuffer();
@@ -1136,7 +1464,6 @@ export async function extractTextFromPdf(file: File): Promise<string> {
       }
     }
 
-    // Agrupa os fragmentos em linhas pela coordenada Y (tolerância de 3 pontos para nunca fundir duas linhas)
     const rows: { y: number; items: TextFragment[] }[] = [];
     for (const frag of fragments) {
       let matchedRow = rows.find((r) => Math.abs(r.y - frag.y) <= 3);
@@ -1147,13 +1474,11 @@ export async function extractTextFromPdf(file: File): Promise<string> {
       matchedRow.items.push(frag);
     }
 
-    // Ordena as linhas de cima para baixo (no PDF, Y cresce de baixo para cima)
     rows.sort((a, b) => b.y - a.y);
 
-    // Dentro de cada linha, ordena as colunas da esquerda para a direita (X crescente)
     const pageLines = rows.map((row) => {
       row.items.sort((a, b) => a.x - b.x);
-      return row.items.map((i) => i.str).join(' ');
+      return normalizeSpacedDottedComanda(row.items.map((i) => i.str).join(' '));
     });
 
     fullText += pageLines.join('\n') + '\n\n';
@@ -1163,58 +1488,16 @@ export async function extractTextFromPdf(file: File): Promise<string> {
 }
 
 /**
- * Amostra realística de relatório do sistema Volux para testes rápidos
- * Estrutura fiel com seções "Comandas lançadas" e "Comandas Canceladas", coluna ADM ("S"/"N"),
- * valores negativos na coluna Total e múltiplos itens na seção de lançadas.
- */
-export const SAMPLE_VOLUX_REPORT_TEXT = `SISTEMA VOLUX - RELATÓRIO OPERACIONAL DE VENDAS POR COMANDA
-Unidade: StrikeZone Bowling Center  Data Emissão: 06/10/2026 23:45
-Filtro: Vendas de Pistas e Fichas Eletrônicas
-
-Comandas lançadas
-========================================================================================================
-COMANDA       DATA       HORA     ITEM VENDIDO               Qtde  UNIT (R$)   TOTAL (R$)   ADM
---------------------------------------------------------------------------------------------------------
-13.402.402    05/10/2026 15:03    Meia Hora de Boliche        1     70,00        49,00       N
-13.402.403    05/10/2026 15:20    Mini Combo                  1     65,00        65,00       N
-13.402.404    05/10/2026 15:45    Uma Hora de Boliche         1    120,00       120,00       S
-13.402.405    05/10/2026 16:15    Fichas Eletronicas          2     12,00        24,00       N
-13.402.406    05/10/2026 17:00    Big Combo                   1    120,00       120,00       N
-13.402.407    05/10/2026 17:40    Mega Combo                  1    250,00       250,00       S
-13.402.408    05/10/2026 18:10    Uma Hora de Boliche         1    120,00       110,00       N
-13.402.409    06/10/2026 14:15    Meia Hora de Boliche        1     70,00        70,00       N
-13.402.410    06/10/2026 14:50    Mini Combo                  1     65,00        65,00       N
-13.402.411    06/10/2026 15:30    Uma Hora de Boliche         2    120,00       240,00       N
-13.402.412    06/10/2026 16:05    Fichas Eletronicas          1     12,00        12,00       S
-13.402.413    06/10/2026 16:45    Big Combo                   1    120,00       120,00       N
-13.402.414    06/10/2026 17:25    Mega Combo                  1    250,00       250,00       N
-13.402.415    06/10/2026 18:00    Meia Hora de Boliche        1     70,00        55,00       N
-13.402.416    06/10/2026 18:30    Uma Hora de Boliche         1    120,00       120,00       N
-13.402.417    06/10/2026 19:15    Meia Hora de Boliche        2     70,00       140,00       S
-
-Comandas Canceladas
---------------------------------------------------------------------------------------------------------
-13.402.416    06/10/2026 18:45    Uma Hora de Boliche         1    120,00      -120,00       N
-========================================================================================================
-RESUMO DO RELATÓRIO VOLUX
-Total Cancelado: R$ -120,00
-Valor Total Líquido: R$ 1.690,00
-========================================================================================================
-FIM DO RELATÓRIO VOLUX
-`;
-
-/**
  * Sugestões comuns de itens para o módulo Alimentos e Bebidas (AeB) baseadas no catálogo oficial Volux
  */
 export const SUGESTOES_AEB = CATALOGO_AEB_PRODUTOS.map((p) => p.nome);
 
 /**
  * Parser exclusivo com Sistema de Conciliação e Auditoria para relatórios Volux Alimentos e Bebidas (AeB).
- * Implementa:
- * 1. Identificação estrutural de seções ("Comandas lançadas" vs "Comandas Canceladas" via isReadingCancelledSection)
- * 2. Captura de valores monetários negativos na coluna Total (ex: -17,90, -31,80)
- * 3. Limpeza da falsa flag "ADM" ("S" ou "N" no final da linha)
- * 4. Multiplicação de itens com Qtde >= 2 (ex: A8126 com quantidade 6) via .push() múltiplo
+ * - Para imediatamente em "Resumo do Período"
+ * - Captura data e hora mesmo invertidas ("16/11 10:49" ou "14:22 16/11")
+ * - Reconhece PDF de A&B vazio ("Comandas X Itens por PDV" sem linhas de venda) sem acusar erro
+ * - Suporta Contas ADM 3000 e 3030 (extraídas ou herdadas da linha anterior) mantendo o valor real
  */
 export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBReconciliationResult {
   const vendas: VendaAeB[] = [];
@@ -1228,34 +1511,45 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
       hasDiscrepancy: false,
       diferenca: 0,
       unmatchedLines,
+      isEmptyReport: false,
     };
   }
+
+  const { headerYear, headerFirstDate } = extractHeaderDateContextFromVoluxText(text);
 
   const launchedOccurrences: Record<string, number> = {};
   const cancelledOccurrences: Record<string, number> = {};
   const rawLines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const lines = splitMergedComandaLines(rawLines);
 
-  // Ordena produtos do catálogo do nome mais longo para o mais curto para match preciso
   const catalogoOrdenado = [...CATALOGO_AEB_PRODUTOS].sort(
     (a, b) => b.nome.length - a.nome.length
   );
 
   let lastComanda = '';
-  let lastData = '05/10';
+  let lastContaAdm: '3000' | '3030' | null = null;
+  let pendingHeaderContaAdm: '3000' | '3030' | null = null;
+  let lastData = headerFirstDate || (headerYear ? `05/10/${headerYear}` : '05/10');
   let lastHora = '15:00';
   let inSummarySection = false;
-  // 1. Flag estrutural de leitura da seção "Comandas Canceladas"
   let isReadingCancelledSection = false;
 
   let totalLancado = 0;
   let totalCanceladoPdf = 0;
 
   for (const rawLine of lines) {
-    const trimmedRaw = rawLine.trim();
+    const trimmedRaw = normalizeSpacedDottedComanda(rawLine.trim());
     const normRaw = normalizeText(trimmedRaw);
 
-    // 1. Identificação Estrutural de Cancelamentos ("Comandas lançadas" vs "Comandas Canceladas")
+    // PARADA IMEDIATA NO "Resumo do Período": nunca lê nem duplica linhas da seção de resumo
+    if (
+      /\bresumo\s+do\s+periodo\b/i.test(normRaw) ||
+      /^resumo\s+do\s+relatorio\b/i.test(normRaw) ||
+      /^fim\s+do\s+relatorio\b/i.test(normRaw)
+    ) {
+      break;
+    }
+
     if (
       trimmedRaw === 'Comandas Canceladas' ||
       /^comandas\s+canceladas\b/i.test(trimmedRaw) ||
@@ -1264,6 +1558,8 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
       isReadingCancelledSection = true;
       inSummarySection = false;
       lastComanda = '';
+      lastContaAdm = null;
+      pendingHeaderContaAdm = null;
       continue;
     }
 
@@ -1275,15 +1571,24 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
       isReadingCancelledSection = false;
       inSummarySection = false;
       lastComanda = '';
+      lastContaAdm = null;
+      pendingHeaderContaAdm = null;
       continue;
     }
 
-    // 4. Limpeza da Falsa Flag "ADM" ("S" ou "N" no final da linha)
     const line = stripTrailingAdmFlag(trimmedRaw);
     const normLine = normalizeText(line);
 
     if (
-      /^(?:resumo|total\s+geral|total\s+por\s+produto|total\s+por\s+item|totalizador|fim\s+do\s+relatorio)/i.test(
+      /\bresumo\s+do\s+periodo\b/i.test(normLine) ||
+      /^resumo\s+do\s+relatorio\b/i.test(normLine) ||
+      /^fim\s+do\s+relatorio\b/i.test(normLine)
+    ) {
+      break;
+    }
+
+    if (
+      /^(?:resumo|total\s+geral|total\s+por\s+produto|total\s+por\s+item|totalizador)/i.test(
         normLine
       )
     ) {
@@ -1294,22 +1599,28 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
     if (
       /^[-=_*]{4,}$/.test(line) ||
       (/comanda/i.test(line) && /item|produto|descri/i.test(line) && /pre[cç]o|valor|total/i.test(line)) ||
-      /^(?:sistema\s+volux|unidade:|filtro:|pagina\s+\d)/i.test(normLine)
+      /^(?:sistema\s+volux|unidade:|filtro:|pagina\s+\d|per[ií]odo:|data\s+emiss|comandas\s*x\s*itens)/i.test(normLine)
     ) {
       continue;
     }
 
     const comandaExtracted = extractComandaFromLine(line);
-    const dataMatch = line.match(/\b(\d{2}\/\d{2}(?:\/\d{2,4})?)\b/);
-    const horaMatch = line.match(/\b(\d{2}:\d{2}(?::\d{2})?)\b/);
+    const lineContaAdm = extractContaAdmFromLine(trimmedRaw, comandaExtracted);
+    const hasExplicitAdmNo = /(?:\s+|\s*[/|]\s*)[Nn](?:\s*[/|]\s*)?$/.test(trimmedRaw);
+    const hasExplicitAdmYes = /(?:\s+|\s*[/|]\s*)[Ss](?:\s*[/|]\s*)?$/.test(trimmedRaw);
+
+    // Captura DD/MM e HH:MM independentemente da ordem na linha ("16/11 10:49" ou "14:22 16/11")
+    const dataMatch = line.match(/\b(\d{1,2}\/\d{2}(?:\/\d{2,4})?)\b/);
+    const horaMatch = line.match(/\b(\d{1,2}:\d{2}(?::\d{2})?)\b/);
     const precoMatches = [...line.matchAll(MONEY_GLOBAL_REGEX)];
 
+    const previousComanda = lastComanda;
     if (comandaExtracted) {
       lastComanda = comandaExtracted;
       inSummarySection = false;
     }
     if (dataMatch) {
-      lastData = formatDataVolux(dataMatch[1]);
+      lastData = formatDataVolux(dataMatch[1], headerYear);
     }
     if (horaMatch) {
       lastHora = formatHoraVolux(horaMatch[1]);
@@ -1334,7 +1645,7 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
       }
     }
 
-    // 2. Se não está no catálogo padrão, extrai posicionalmente antes do primeiro preço
+    // 2. Se não está no catálogo padrão, extrai posicionalmente e limpa códigos OS/boliche/ivolux
     if (
       !itemNome &&
       (Boolean(comandaExtracted) || Boolean(lastComanda)) &&
@@ -1342,7 +1653,7 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
     ) {
       const candidate = extractPositionalItemName(line, precoMatches[0][0], comandaExtracted);
       if (candidate.length >= 2) {
-        itemNome = candidate;
+        itemNome = cleanCommercialItemName(candidate);
       }
     }
 
@@ -1352,50 +1663,99 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
       (Boolean(comandaExtracted) || Boolean(lastComanda))
     ) {
       const comandaCode = comandaExtracted || lastComanda;
-      const dataStr = dataMatch ? formatDataVolux(dataMatch[1]) : lastData;
+      const dataStr = dataMatch ? formatDataVolux(dataMatch[1], headerYear) : lastData;
       const horaStr = horaMatch ? formatHoraVolux(horaMatch[1]) : lastHora;
+      const cleanItemNome = cleanCommercialItemName(itemNome) || itemNome;
 
-      const { quantidade, precoUnitario } = extractQuantityAndUnitPrice(
+      const { quantidade, precoUnitario, valorTotal } = extractQuantityAndUnitPrice(
         line,
-        itemNome,
+        cleanItemNome,
         precoReferencia
       );
 
-      // Cancelamento determinado ESTRITAMENTE pela seção "Comandas Canceladas", valor negativo ou palavra explícita CANCELADO
       const isCancelado =
         isReadingCancelledSection || precoUnitario < 0 || isLinhaCanceladaVolux(line);
 
+      let contaAdmCode: '3000' | '3030' | null = null;
+      if (lineContaAdm) {
+        contaAdmCode = lineContaAdm;
+        lastContaAdm = lineContaAdm;
+      } else if (pendingHeaderContaAdm && !hasExplicitAdmNo) {
+        contaAdmCode = pendingHeaderContaAdm;
+        lastContaAdm = pendingHeaderContaAdm;
+      } else if (
+        lastContaAdm &&
+        !hasExplicitAdmNo &&
+        (!comandaExtracted || comandaExtracted === previousComanda || hasExplicitAdmYes)
+      ) {
+        contaAdmCode = lastContaAdm;
+      } else {
+        lastContaAdm = null;
+      }
+      pendingHeaderContaAdm = null;
+
+      const isContaAdm = contaAdmCode !== null;
+      const isVoucher = !isCancelado && !isContaAdm && isLinhaVoucherVolux(trimmedRaw);
+
       const precoAbsoluto = Math.abs(precoUnitario);
-      const precoEfetivo = isCancelado ? 0 : precoAbsoluto;
+      const valorTotalLinha =
+        valorTotal !== undefined
+          ? Math.abs(valorTotal)
+          : Number((precoAbsoluto * quantidade).toFixed(2));
 
       if (isCancelado) {
-        totalCanceladoPdf = Number((totalCanceladoPdf + precoAbsoluto * quantidade).toFixed(2));
+        totalCanceladoPdf = Number((totalCanceladoPdf + valorTotalLinha).toFixed(2));
       } else {
-        totalLancado = Number((totalLancado + precoAbsoluto * quantidade).toFixed(2));
+        totalLancado = Number((totalLancado + valorTotalLinha).toFixed(2));
       }
 
       const occMap = isCancelado ? cancelledOccurrences : launchedOccurrences;
+      const baseId = generateBaseDeterministicPdfId(comandaCode, dataStr, horaStr, cleanItemNome);
 
-      // REGRA DE QUANTIDADE (Qtde >= 2, como o A8126 com quantidade 6): loop para dar .push() múltiplo
-      for (let q = 0; q < quantidade; q++) {
-        const baseId = generateBaseDeterministicPdfId(comandaCode, dataStr, horaStr, itemNome);
-        occMap[baseId] = (occMap[baseId] || 0) + 1;
-        const idDeterministico = `${baseId}_${occMap[baseId]}`;
+      // Mantém a venda de AeB agrupada na mesma linha (1 registro por linha do PDF com qtde e valorTotalLinha)
+      occMap[baseId] = (occMap[baseId] || 0) + 1;
+      const idDeterministico = `${baseId}_${occMap[baseId]}`;
+      const precoEfetivoLinha = isCancelado ? -valorTotalLinha : valorTotalLinha;
 
-        vendas.push({
-          id: idDeterministico,
-          comanda: comandaCode,
-          data: dataStr,
-          hora: horaStr,
-          item: itemNome,
-          preco: precoEfetivo,
-          responsavel: '',
-          cancelado: isCancelado,
-          status: isCancelado ? 'Cancelado' : 'Ativo',
-        });
+      vendas.push({
+        id: idDeterministico,
+        pdfId: idDeterministico,
+        origem: 'PDF',
+        comanda: comandaCode,
+        data: dataStr,
+        hora: horaStr,
+        item: cleanItemNome,
+        qtde: quantidade,
+        preco: precoEfetivoLinha,
+        responsavel: '',
+        cancelado: isCancelado,
+        status: isCancelado ? 'Cancelado' : 'Ativo',
+        ...(contaAdmCode
+          ? {
+              conta3000: true,
+              contaAdm: contaAdmCode,
+              espaco: contaAdmCode,
+              isCortesia: true,
+              motivoOperacional: 'Cortesia',
+            }
+          : isVoucher
+            ? {
+                isVoucher: true,
+                motivoOperacional: 'Voucher',
+              }
+            : {}),
+      });
+    } else {
+      if (lineContaAdm) {
+        pendingHeaderContaAdm = lineContaAdm;
+        lastContaAdm = lineContaAdm;
+      } else if (comandaExtracted && hasExplicitAdmNo) {
+        pendingHeaderContaAdm = null;
+        lastContaAdm = null;
       }
-    } else if (precoMatches.length > 0 && !isTotalLine) {
-      unmatchedLines.push(line);
+      if (precoMatches.length > 0 && !isTotalLine) {
+        unmatchedLines.push(line);
+      }
     }
   }
 
@@ -1418,45 +1778,8 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
 
   const diferenca =
     totalEsperado !== null ? Number(Math.abs(totalEsperado - totalExtraido).toFixed(2)) : 0;
-  // Validação de conciliação: if (totalExtraido !== totalEsperado)
   const hasDiscrepancy =
     totalEsperado !== null && totalExtraido !== totalEsperado && diferenca > 0.05;
-
-  console.log('================================================================');
-  console.log('[VOLUX AUDITORIA & CONCILIAÇÃO - ALIMENTOS E BEBIDAS (AeB)]');
-  console.log(`Total de Registros Extraídos: ${vendas.length}`);
-  console.log(`Total Comandas Lançadas: R$ ${totalLancado.toFixed(2)}`);
-  console.log(`Total Comandas Canceladas (Estornos no PDF): R$ ${totalCanceladoPdf.toFixed(2)}`);
-  console.log(`Valor Total Extraído (Conciliado): R$ ${totalExtraido.toFixed(2)}`);
-  console.log(
-    `Valor Total Esperado (Rodapé PDF): ${
-      totalEsperado !== null ? `R$ ${totalEsperado.toFixed(2)}` : 'Não informado no rodapé'
-    }`
-  );
-  if (hasDiscrepancy) {
-    console.warn(
-      `⚠️ DISCREPÂNCIA DETECTADA EM AeB! Esperado: R$ ${totalEsperado?.toFixed(2)} | Extraído: R$ ${totalExtraido.toFixed(2)} | Diferença: R$ ${diferenca.toFixed(2)}`
-    );
-  }
-  console.log('Lista completa de comandas e itens AeB extraídos:', vendas);
-  if (typeof console.table === 'function' && vendas.length > 0) {
-    console.table(
-      vendas.map((v, i) => ({
-        '#': i + 1,
-        Comanda: v.comanda,
-        Data: v.data,
-        Hora: v.hora,
-        Produto: v.item,
-        'Preço Unit. (R$)': v.preco,
-        Status: v.cancelado ? 'Cancelado (Estorno)' : 'Ativo',
-        ID: v.id,
-      }))
-    );
-  }
-  if (unmatchedLines.length > 0) {
-    console.log('Linhas não associadas (para conferência):', unmatchedLines);
-  }
-  console.log('================================================================');
 
   return {
     vendas,
@@ -1465,45 +1788,10 @@ export function parseVoluxAeBTextWithReconciliation(text: string): VoluxAeBRecon
     hasDiscrepancy,
     diferenca,
     unmatchedLines,
+    isEmptyReport: vendas.length === 0 && isValidVoluxReportHeader(text),
   };
 }
 
 export function parseVoluxAeBText(text: string): VendaAeB[] {
   return parseVoluxAeBTextWithReconciliation(text).vendas;
 }
-
-/**
- * Relatório exemplo para testes de Alimentos e Bebidas (AeB)
- * Inclui seções "Comandas lançadas" (ex: A8126 com Qtde = 6, coluna ADM "S"/"N")
- * e "Comandas Canceladas" com valores negativos (-17,90, -31,80).
- */
-export const SAMPLE_VOLUX_AEB_REPORT_TEXT = `SISTEMA VOLUX - RELATÓRIO DE VENDAS · ALIMENTOS E BEBIDAS (AeB)
-Unidade: StrikeZone Bowling Center  Data Emissão: 06/10/2026 23:50
-Filtro: Setor Bar & Conveniência · Alimentos e Bebidas (AeB)
-
-Comandas lançadas
-========================================================================================================
-COMANDA       DATA       HORA     ITEM PRODUTO                  Qtde  UNIT (R$)  TOTAL (R$)   ADM
---------------------------------------------------------------------------------------------------------
-A8120         05/10/2026 15:10    Agua Mineral S/Gas Lata 350ml   1     9,90        9,90       N
-A8121         05/10/2026 15:25    Coca Cola Lata 350Ml            2    11,90       23,80       N
-A8122         05/10/2026 15:40    Cerveja Heineken Long Neck      1    17,90       17,90       S
-A8123         05/10/2026 16:00    Suco Del Valle Lata Uva 290Ml   1    14,00       14,00       N
-A8124         05/10/2026 16:30    Energetico Red Bull             1    19,90       19,90       N
-A8125         05/10/2026 17:15    Salgadinho Doritos              1    10,90       10,90       N
-A8126         06/10/2026 18:10    Cerveja Heineken Lata           6    15,90       95,40       S
-A8127         06/10/2026 18:55    Guarana Antartica Lata 350Ml    1    11,90       11,90       N
-A8128         06/10/2026 19:35    Café Expresso                   2     8,00       16,00       N
-
-Comandas Canceladas
---------------------------------------------------------------------------------------------------------
-A8122         05/10/2026 16:05    Cerveja Heineken Long Neck      1    17,90      -17,90       N
-A8126         06/10/2026 18:40    Cerveja Heineken Lata           2    15,90      -31,80       N
-A7990         01/10/2026 21:00    Energetico Red Bull             1    19,90      -19,90       N
-========================================================================================================
-RESUMO DO RELATÓRIO VOLUX AeB
-Valor Total Lançado: R$ 219,70
-========================================================================================================
-FIM DO RELATÓRIO VOLUX AeB
-`;
-

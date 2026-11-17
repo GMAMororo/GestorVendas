@@ -1,0 +1,359 @@
+{
+  "entities": {
+    "VendaComanda": {
+      "title": "VendaComanda",
+      "description": "Registro de venda de comanda (Boliche ou Fichas) importado do Volux ou lançado manualmente.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identificador determinístico do PDF ou UUID da venda manual.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "comanda": {
+          "type": "string",
+          "description": "Código ou número da comanda Volux.",
+          "maxLength": 100
+        },
+        "data": {
+          "type": "string",
+          "description": "Data da venda no formato DD/MM ou DD/MM/YYYY.",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "hora": {
+          "type": "string",
+          "description": "Hora da venda no formato HH:MM.",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "tipo_venda": {
+          "type": "string",
+          "description": "Categoria da venda: Boliche, Fichas ou AeB.",
+          "enum": ["Boliche", "Fichas", "AeB"],
+          "maxLength": 20
+        },
+        "item": {
+          "type": "string",
+          "description": "Descrição do item vendido.",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "preco": {
+          "type": "number",
+          "description": "Valor monetário da venda em reais."
+        },
+        "responsavel": {
+          "type": "string",
+          "description": "Nome do operador responsável pela comanda.",
+          "maxLength": 200
+        },
+        "qtde": {
+          "type": "number",
+          "description": "Quantidade de unidades do item."
+        },
+        "cancelado": {
+          "type": "boolean",
+          "description": "Indica se a venda foi cancelada/estornada."
+        },
+        "status": {
+          "type": "string",
+          "description": "Status operacional da venda (Ativo ou Cancelado).",
+          "maxLength": 40
+        },
+        "isCortesia": {
+          "type": "boolean",
+          "description": "Indica se o registro é uma cortesia (manual ou Comanda 3000 do Volux)."
+        },
+        "isManutencao": {
+          "type": "boolean",
+          "description": "Indica se o registro é uma saída de ficha para manutenção."
+        },
+        "motivoOperacional": {
+          "type": "string",
+          "description": "Classificação operacional: Normal, Cortesia ou Manutenção.",
+          "maxLength": 40
+        }
+      },
+      "required": ["id", "data", "hora", "tipo_venda", "item", "preco", "responsavel"]
+    },
+    "VendaAeB": {
+      "title": "VendaAeB",
+      "description": "Registro de venda do setor de Alimentos e Bebidas (AeB).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identificador determinístico do PDF ou UUID da venda manual.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "comanda": {
+          "type": "string",
+          "description": "Código ou número da comanda Volux.",
+          "maxLength": 100
+        },
+        "data": {
+          "type": "string",
+          "description": "Data da venda no formato DD/MM ou DD/MM/YYYY.",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "hora": {
+          "type": "string",
+          "description": "Hora da venda no formato HH:MM.",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "item": {
+          "type": "string",
+          "description": "Descrição do alimento ou bebida vendido.",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "preco": {
+          "type": "number",
+          "description": "Valor monetário da venda em reais."
+        },
+        "responsavel": {
+          "type": "string",
+          "description": "Nome do operador responsável pela comanda.",
+          "maxLength": 200
+        },
+        "cancelado": {
+          "type": "boolean",
+          "description": "Indica se a venda foi cancelada/estornada."
+        },
+        "status": {
+          "type": "string",
+          "description": "Status operacional da venda (Ativo ou Cancelado).",
+          "maxLength": 40
+        },
+        "isCortesia": {
+          "type": "boolean",
+          "description": "Indica se o item AeB foi lançado como cortesia."
+        },
+        "motivoOperacional": {
+          "type": "string",
+          "description": "Classificação operacional: Normal ou Cortesia.",
+          "maxLength": 40
+        }
+      },
+      "required": ["id", "data", "hora", "item", "preco", "responsavel"]
+    },
+    "FechamentoTurnoFichas": {
+      "title": "FechamentoTurnoFichas",
+      "description": "Registro histórico de auditoria e fechamento de turno de fichas físicas (Pratas e Douradas).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identificador único do fechamento.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "data": {
+          "type": "string",
+          "description": "Data do turno fechado (DD/MM/YYYY).",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "turno": {
+          "type": "string",
+          "description": "Turno auditado (Manhã ou Tarde-Noite).",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "responsavel": {
+          "type": "string",
+          "description": "Nome do operador responsável pelo turno.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "inicialPrata": {
+          "type": "number",
+          "description": "Contagem inicial de fichas pratas na abertura."
+        },
+        "reposicaoPrata": {
+          "type": "number",
+          "description": "Total de fichas pratas adicionadas via reposição (suprimento) durante o turno."
+        },
+        "vendidasPrataSistema": {
+          "type": "number",
+          "description": "Total de fichas pratas vendidas segundo o sistema."
+        },
+        "esperadoPrata": {
+          "type": "number",
+          "description": "Saldo final esperado de fichas pratas (Inicial + Reposição - Saída Sistema)."
+        },
+        "finalPrata": {
+          "type": "number",
+          "description": "Contagem final manual de fichas pratas."
+        },
+        "diferencaPrata": {
+          "type": "number",
+          "description": "Diferença entre final manual e esperado de fichas pratas."
+        },
+        "inicialDourada": {
+          "type": "number",
+          "description": "Contagem inicial de fichas douradas na abertura."
+        },
+        "reposicaoDourada": {
+          "type": "number",
+          "description": "Total de fichas douradas adicionadas via reposição (suprimento) durante o turno."
+        },
+        "vendidasDouradaSistema": {
+          "type": "number",
+          "description": "Total de fichas douradas saídas segundo o sistema."
+        },
+        "esperadoDourada": {
+          "type": "number",
+          "description": "Saldo final esperado de fichas douradas (Inicial + Reposição - Saída Sistema)."
+        },
+        "finalDourada": {
+          "type": "number",
+          "description": "Contagem final manual de fichas douradas."
+        },
+        "diferencaDourada": {
+          "type": "number",
+          "description": "Diferença entre final manual e esperado de fichas douradas."
+        },
+        "contagemInicial": {
+          "type": "number",
+          "description": "Soma inicial total para compatibilidade."
+        },
+        "contagemFinal": {
+          "type": "number",
+          "description": "Soma final total para compatibilidade."
+        },
+        "fichasVendidas": {
+          "type": "number",
+          "description": "Soma total de fichas vendidas para compatibilidade."
+        },
+        "observacao": {
+          "type": "string",
+          "description": "Observações ou justificativas de diferença de caixa.",
+          "maxLength": 500
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Horário do fechamento do turno.",
+          "maxLength": 50
+        },
+        "abertoEm": {
+          "type": "string",
+          "description": "Horário em que o turno foi aberto.",
+          "maxLength": 50
+        }
+      },
+      "required": [
+        "id",
+        "data",
+        "turno",
+        "responsavel",
+        "inicialPrata",
+        "vendidasPrataSistema",
+        "esperadoPrata",
+        "finalPrata",
+        "diferencaPrata",
+        "inicialDourada",
+        "vendidasDouradaSistema",
+        "esperadoDourada",
+        "finalDourada",
+        "diferencaDourada"
+      ]
+    },
+    "TurnoAtivoCaixa": {
+      "title": "TurnoAtivoCaixa",
+      "description": "Documento único que armazena o estado do turno atualmente aberto no caixa.",
+      "type": "object",
+      "properties": {
+        "aberto": {
+          "type": "boolean",
+          "description": "Indica se há um turno aberto em andamento."
+        },
+        "data": {
+          "type": "string",
+          "description": "Data do turno ativo no formato YYYY-MM-DD.",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "dataExibicao": {
+          "type": "string",
+          "description": "Data formatada para exibição DD/MM/YYYY.",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "turno": {
+          "type": "string",
+          "description": "Turno selecionado na abertura (Manhã ou Tarde-Noite).",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "responsavel": {
+          "type": "string",
+          "description": "Operador responsável que abriu o turno.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "inicialPrata": {
+          "type": "number",
+          "description": "Estoque inicial de fichas pratas na abertura do turno."
+        },
+        "inicialDourada": {
+          "type": "number",
+          "description": "Estoque inicial de fichas douradas na abertura do turno."
+        },
+        "reposicaoPrata": {
+          "type": "number",
+          "description": "Total de fichas pratas adicionadas por reposição (suprimento) durante o turno aberto."
+        },
+        "reposicaoDourada": {
+          "type": "number",
+          "description": "Total de fichas douradas adicionadas por reposição (suprimento) durante o turno aberto."
+        },
+        "abertoEm": {
+          "type": "string",
+          "description": "Horário de abertura do turno.",
+          "maxLength": 50
+        }
+      },
+      "required": [
+        "aberto",
+        "data",
+        "dataExibicao",
+        "turno",
+        "responsavel",
+        "inicialPrata",
+        "inicialDourada",
+        "abertoEm"
+      ]
+    }
+  },
+  "firestore": {
+    "/comandas_boliche/{comandaId}": {
+      "schema": { "$ref": "#/entities/VendaComanda" },
+      "description": "Coleção principal de comandas e vendas de Boliche e Fichas."
+    },
+    "/comandas_aeb/{aebId}": {
+      "schema": { "$ref": "#/entities/VendaAeB" },
+      "description": "Coleção principal de vendas de Alimentos e Bebidas (AeB)."
+    },
+    "/fechamentos_historico/{fechamentoId}": {
+      "schema": { "$ref": "#/entities/FechamentoTurnoFichas" },
+      "description": "Coleção de histórico de fechamentos e auditorias de turnos de fichas."
+    },
+    "/status_caixa/{docId}": {
+      "schema": { "$ref": "#/entities/TurnoAtivoCaixa" },
+      "description": "Coleção de documento único (atual) para o estado do turno ativo de caixa."
+    },
+    "/turno_ativo/{docId}": {
+      "schema": { "$ref": "#/entities/TurnoAtivoCaixa" },
+      "description": "Espelho de documento único (atual) para o turno ativo de caixa."
+    }
+  }
+}

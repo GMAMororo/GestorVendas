@@ -1,0 +1,197 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 256 && id.matches('^[a-zA-Z0-9_\\-.: ]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation Blueprint: VendaComanda (comandas_boliche)
+    function isValidVendaComanda(data) {
+      return data.keys().hasAll(['id', 'data', 'hora', 'tipo_venda', 'item', 'preco', 'responsavel']) &&
+        data.keys().hasOnly([
+          'id', 'comanda', 'data', 'hora', 'tipo_venda', 'item', 'preco', 'responsavel',
+          'qtde', 'cancelado', 'status', 'isCortesia', 'isManutencao', 'motivoOperacional'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 256 &&
+        (!('comanda' in data) || (data.comanda is string && data.comanda.size() <= 150)) &&
+        data.data is string && data.data.size() >= 1 && data.data.size() <= 40 &&
+        data.hora is string && data.hora.size() >= 1 && data.hora.size() <= 30 &&
+        data.tipo_venda is string && data.tipo_venda.size() <= 20 &&
+        (data.tipo_venda == 'Boliche' || data.tipo_venda == 'Fichas' || data.tipo_venda == 'AeB') &&
+        data.item is string && data.item.size() >= 1 && data.item.size() <= 300 &&
+        data.preco is number && data.preco >= 0 &&
+        data.responsavel is string && data.responsavel.size() <= 200 &&
+        (!('qtde' in data) || (data.qtde is number && data.qtde >= 1)) &&
+        (!('cancelado' in data) || data.cancelado is bool) &&
+        (!('status' in data) || (data.status is string && data.status.size() <= 40)) &&
+        (!('isCortesia' in data) || data.isCortesia is bool) &&
+        (!('isManutencao' in data) || data.isManutencao is bool) &&
+        (!('motivoOperacional' in data) || (data.motivoOperacional is string && data.motivoOperacional.size() <= 40));
+    }
+
+    // Validation Blueprint: VendaAeB (comandas_aeb)
+    function isValidVendaAeB(data) {
+      return data.keys().hasAll(['id', 'data', 'hora', 'item', 'preco', 'responsavel']) &&
+        data.keys().hasOnly([
+          'id', 'comanda', 'data', 'hora', 'tipo_venda', 'item', 'preco', 'responsavel',
+          'qtde', 'cancelado', 'status', 'isCortesia', 'isManutencao', 'motivoOperacional'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 256 &&
+        (!('comanda' in data) || (data.comanda is string && data.comanda.size() <= 150)) &&
+        data.data is string && data.data.size() >= 1 && data.data.size() <= 40 &&
+        data.hora is string && data.hora.size() >= 1 && data.hora.size() <= 30 &&
+        (!('tipo_venda' in data) || (data.tipo_venda is string && data.tipo_venda.size() <= 20)) &&
+        data.item is string && data.item.size() >= 1 && data.item.size() <= 300 &&
+        data.preco is number && data.preco >= 0 &&
+        data.responsavel is string && data.responsavel.size() <= 200 &&
+        (!('qtde' in data) || (data.qtde is number && data.qtde >= 1)) &&
+        (!('cancelado' in data) || data.cancelado is bool) &&
+        (!('status' in data) || (data.status is string && data.status.size() <= 40)) &&
+        (!('isCortesia' in data) || data.isCortesia is bool) &&
+        (!('isManutencao' in data) || data.isManutencao is bool) &&
+        (!('motivoOperacional' in data) || (data.motivoOperacional is string && data.motivoOperacional.size() <= 40));
+    }
+
+    // Validation Blueprint: FechamentoTurnoFichas (fechamentos_historico)
+    function isValidFechamento(data) {
+      return data.keys().hasAll([
+          'id', 'data', 'turno', 'responsavel',
+          'inicialPrata', 'vendidasPrataSistema', 'esperadoPrata', 'finalPrata', 'diferencaPrata',
+          'inicialDourada', 'vendidasDouradaSistema', 'esperadoDourada', 'finalDourada', 'diferencaDourada'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'data', 'turno', 'responsavel',
+          'inicialPrata', 'reposicaoPrata', 'vendidasPrataSistema', 'esperadoPrata', 'finalPrata', 'diferencaPrata',
+          'inicialDourada', 'reposicaoDourada', 'vendidasDouradaSistema', 'esperadoDourada', 'finalDourada', 'diferencaDourada',
+          'contagemInicial', 'contagemFinal', 'fichasVendidas', 'observacao', 'timestamp', 'abertoEm'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 256 &&
+        data.data is string && data.data.size() >= 1 && data.data.size() <= 40 &&
+        data.turno is string && data.turno.size() >= 1 && data.turno.size() <= 80 &&
+        data.responsavel is string && data.responsavel.size() >= 1 && data.responsavel.size() <= 200 &&
+        data.inicialPrata is number &&
+        (!('reposicaoPrata' in data) || (data.reposicaoPrata is number && data.reposicaoPrata >= 0)) &&
+        data.vendidasPrataSistema is number &&
+        data.esperadoPrata is number &&
+        data.finalPrata is number &&
+        data.diferencaPrata is number &&
+        data.inicialDourada is number &&
+        (!('reposicaoDourada' in data) || (data.reposicaoDourada is number && data.reposicaoDourada >= 0)) &&
+        data.vendidasDouradaSistema is number &&
+        data.esperadoDourada is number &&
+        data.finalDourada is number &&
+        data.diferencaDourada is number &&
+        (!('contagemInicial' in data) || data.contagemInicial is number) &&
+        (!('contagemFinal' in data) || data.contagemFinal is number) &&
+        (!('fichasVendidas' in data) || data.fichasVendidas is number) &&
+        (!('observacao' in data) || (data.observacao is string && data.observacao.size() <= 500)) &&
+        (!('timestamp' in data) || (data.timestamp is string && data.timestamp.size() <= 50)) &&
+        (!('abertoEm' in data) || (data.abertoEm is string && data.abertoEm.size() <= 50));
+    }
+
+    // Validation Blueprint: TurnoAtivoCaixa (status_caixa / turno_ativo)
+    function isValidTurnoAtivo(data) {
+      return data.keys().hasAll(['aberto', 'data', 'dataExibicao', 'turno', 'responsavel', 'inicialPrata', 'inicialDourada', 'abertoEm']) &&
+        data.keys().hasOnly([
+          'aberto', 'data', 'dataExibicao', 'turno', 'responsavel',
+          'inicialPrata', 'inicialDourada', 'reposicaoPrata', 'reposicaoDourada', 'abertoEm'
+        ]) &&
+        data.aberto is bool &&
+        data.data is string && data.data.size() >= 1 && data.data.size() <= 40 &&
+        data.dataExibicao is string && data.dataExibicao.size() >= 1 && data.dataExibicao.size() <= 40 &&
+        data.turno is string && data.turno.size() >= 1 && data.turno.size() <= 80 &&
+        data.responsavel is string && data.responsavel.size() >= 1 && data.responsavel.size() <= 200 &&
+        data.inicialPrata is number && data.inicialPrata >= 0 &&
+        data.inicialDourada is number && data.inicialDourada >= 0 &&
+        (!('reposicaoPrata' in data) || (data.reposicaoPrata is number && data.reposicaoPrata >= 0)) &&
+        (!('reposicaoDourada' in data) || (data.reposicaoDourada is number && data.reposicaoDourada >= 0)) &&
+        data.abertoEm is string && data.abertoEm.size() >= 1 && data.abertoEm.size() <= 50;
+    }
+
+    // Health-check test path for getDocFromServer boot check
+    match /test/{docId} {
+      allow get: if isValidId(docId);
+    }
+
+    // 1. Coleção: comandas_boliche
+    match /comandas_boliche/{comandaId} {
+      allow get: if isValidId(comandaId);
+      allow list: if true;
+      allow create: if isValidId(comandaId) && isValidVendaComanda(incoming());
+      allow update: if isValidId(comandaId) && isValidVendaComanda(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'id', 'comanda', 'data', 'hora', 'tipo_venda', 'item', 'preco', 'responsavel',
+          'qtde', 'cancelado', 'status', 'isCortesia', 'isManutencao', 'motivoOperacional'
+        ]);
+      allow delete: if isValidId(comandaId);
+    }
+
+    // 2. Coleção: comandas_aeb
+    match /comandas_aeb/{aebId} {
+      allow get: if isValidId(aebId);
+      allow list: if true;
+      allow create: if isValidId(aebId) && isValidVendaAeB(incoming());
+      allow update: if isValidId(aebId) && isValidVendaAeB(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'id', 'comanda', 'data', 'hora', 'tipo_venda', 'item', 'preco', 'responsavel',
+          'qtde', 'cancelado', 'status', 'isCortesia', 'isManutencao', 'motivoOperacional'
+        ]);
+      allow delete: if isValidId(aebId);
+    }
+
+    // 3. Coleção: fechamentos_historico
+    match /fechamentos_historico/{fechamentoId} {
+      allow get: if isValidId(fechamentoId);
+      allow list: if true;
+      allow create: if isValidId(fechamentoId) && isValidFechamento(incoming());
+      allow update: if isValidId(fechamentoId) && isValidFechamento(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'id', 'data', 'turno', 'responsavel',
+          'inicialPrata', 'reposicaoPrata', 'vendidasPrataSistema', 'esperadoPrata', 'finalPrata', 'diferencaPrata',
+          'inicialDourada', 'reposicaoDourada', 'vendidasDouradaSistema', 'esperadoDourada', 'finalDourada', 'diferencaDourada',
+          'contagemInicial', 'contagemFinal', 'fichasVendidas', 'observacao', 'timestamp', 'abertoEm'
+        ]);
+      allow delete: if isValidId(fechamentoId);
+    }
+
+    // 4. Coleção de Documento Único: status_caixa/atual
+    match /status_caixa/{docId} {
+      allow get: if docId == 'atual';
+      allow list: if true;
+      allow create: if docId == 'atual' && isValidTurnoAtivo(incoming());
+      allow update: if docId == 'atual' && isValidTurnoAtivo(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'aberto', 'data', 'dataExibicao', 'turno', 'responsavel',
+          'inicialPrata', 'inicialDourada', 'reposicaoPrata', 'reposicaoDourada', 'abertoEm'
+        ]);
+      allow delete: if docId == 'atual';
+    }
+
+    // Espelho: turno_ativo/atual
+    match /turno_ativo/{docId} {
+      allow get: if docId == 'atual';
+      allow list: if true;
+      allow create: if docId == 'atual' && isValidTurnoAtivo(incoming());
+      allow update: if docId == 'atual' && isValidTurnoAtivo(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'aberto', 'data', 'dataExibicao', 'turno', 'responsavel',
+          'inicialPrata', 'inicialDourada', 'reposicaoPrata', 'reposicaoDourada', 'abertoEm'
+        ]);
+      allow delete: if docId == 'atual';
+    }
+  }
+}

@@ -1,11 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   UploadCloud,
   FileText,
   Loader2,
   CheckCircle,
   AlertTriangle,
-  Sparkles,
   X,
   FileCode,
   GlassWater,
@@ -14,7 +13,6 @@ import {
   extractTextFromPdf,
   parseVoluxAeBTextWithReconciliation,
   VoluxAeBReconciliationResult,
-  SAMPLE_VOLUX_AEB_REPORT_TEXT,
 } from '../utils/voluxParser';
 import { VendaAeB } from '../types/venda';
 import { formatCurrencyBRL } from '../utils/formatters';
@@ -56,6 +54,18 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!discrepancyAlert && !showPasteModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (discrepancyAlert) setDiscrepancyAlert(null);
+        if (showPasteModal) setShowPasteModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [discrepancyAlert, showPasteModal]);
+
   const commitValidatedData = (
     reconciliation: VoluxAeBReconciliationResult,
     sourceName: string
@@ -92,6 +102,19 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
       const parsed = reconciliation.vendas;
 
       if (parsed.length === 0) {
+        if (reconciliation.isEmptyReport || sourceName.toLowerCase().endsWith('.pdf')) {
+          onDataLoaded([], sourceName);
+          setSuccessInfo({
+            fileName: sourceName,
+            totalItens: 0,
+            updatedItens: 0,
+            totalValor: 0,
+            totalLido: 0,
+          });
+          setErrorMessage(null);
+          setDiscrepancyAlert(null);
+          return;
+        }
         setErrorMessage(
           'Não foi possível encontrar itens de Alimentos e Bebidas (AeB) no documento. Verifique se o arquivo contém comandas e itens válidos.'
         );
@@ -189,15 +212,6 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
     }
   };
 
-  const handleLoadSample = () => {
-    setIsLoading(true);
-    setErrorMessage(null);
-    setTimeout(() => {
-      processTextAndEmit(SAMPLE_VOLUX_AEB_REPORT_TEXT, 'Relatorio_Volux_AeB_Exemplo.pdf');
-      setIsLoading(false);
-    }, 350);
-  };
-
   const handleProcessPastedText = () => {
     if (!pastedText.trim()) return;
     processTextAndEmit(pastedText, 'Texto_Colado_AeB.txt');
@@ -253,15 +267,17 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
                 {successInfo && (
                   <span className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200/70 px-2 py-0.5 rounded">
                     <CheckCircle className="w-3 h-3" />
-                    {successInfo.totalItens > 0
-                      ? `${successInfo.totalItens} ${successInfo.totalItens === 1 ? 'item novo importado' : 'itens novos importados'} com sucesso (${formatCurrencyBRL(successInfo.totalValor)})${
-                          successInfo.updatedItens && successInfo.updatedItens > 0
-                            ? ` · ${successInfo.updatedItens} atualizado(s)`
-                            : ''
-                        }`
-                      : successInfo.updatedItens && successInfo.updatedItens > 0
-                      ? `${successInfo.updatedItens} ${successInfo.updatedItens === 1 ? 'item existente sincronizado/atualizado' : 'itens existentes sincronizados/atualizados'} com sucesso`
-                      : `Todos os itens de AeB já constavam no sistema (0 novos inseridos)`}
+                    {successInfo.totalLido === 0
+                      ? 'PDF lido com sucesso: Nenhuma comanda de A&B lançada neste período (R$ 0,00).'
+                      : successInfo.totalItens > 0
+                        ? `${successInfo.totalItens} ${successInfo.totalItens === 1 ? 'item novo importado' : 'itens novos importados'} com sucesso (${formatCurrencyBRL(successInfo.totalValor)})${
+                            successInfo.updatedItens && successInfo.updatedItens > 0
+                              ? ` · ${successInfo.updatedItens} atualizado(s)`
+                              : ''
+                          }`
+                        : successInfo.updatedItens && successInfo.updatedItens > 0
+                          ? `${successInfo.updatedItens} ${successInfo.updatedItens === 1 ? 'item existente sincronizado/atualizado' : 'itens existentes sincronizados/atualizados'} com sucesso`
+                          : `Todos os itens de AeB já constavam no sistema (0 novos inseridos)`}
                   </span>
                 )}
               </div>
@@ -292,18 +308,6 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
                   <span>Importar Relatório Volux AeB (PDF)</span>
                 </>
               )}
-            </button>
-
-            {/* Teste com exemplo de AeB */}
-            <button
-              type="button"
-              disabled={isLoading}
-              onClick={handleLoadSample}
-              title="Carregar relatório de teste com vendas de alimentos, bebidas, refrigerantes e guloseimas"
-              className="inline-flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200/80 rounded-lg border border-neutral-200 transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>Carregar Exemplo AeB</span>
             </button>
 
             {/* Colar Texto */}
@@ -357,8 +361,12 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
 
       {/* Modal de Alerta Visual de Discrepância na Conciliação AeB */}
       {discrepancyAlert && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/50 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+        <div
+          onClick={() => setDiscrepancyAlert(null)}
+          className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/50 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4"
+        >
           <div
+            onClick={(e) => e.stopPropagation()}
             className="bg-white rounded-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-2xl border border-red-200 shadow-xl animate-in fade-in zoom-in-95 duration-150"
             role="alertdialog"
             aria-modal="true"
@@ -464,8 +472,12 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
 
       {/* Modal Colar Texto AeB */}
       {showPasteModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4">
+        <div
+          onClick={() => setShowPasteModal(false)}
+          className="fixed inset-0 z-50 overflow-y-auto bg-neutral-900/40 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4"
+        >
           <div
+            onClick={(e) => e.stopPropagation()}
             className="bg-white rounded-xl w-[95%] max-h-[90vh] overflow-y-auto md:w-full md:max-w-lg border border-neutral-200 shadow-xl animate-in fade-in zoom-in-95 duration-150"
             role="dialog"
             aria-modal="true"
@@ -498,13 +510,6 @@ export const AeBUploadArea: React.FC<AeBUploadAreaProps> = ({
               />
               <div className="flex items-center justify-between text-xs text-neutral-500">
                 <span>Extrai Comanda, Data, Hora, Item (AeB) e Preço automaticamente.</span>
-                <button
-                  type="button"
-                  onClick={() => setPastedText(SAMPLE_VOLUX_AEB_REPORT_TEXT)}
-                  className="text-blue-700 hover:underline font-medium cursor-pointer"
-                >
-                  Inserir exemplo de AeB
-                </button>
               </div>
             </div>
 

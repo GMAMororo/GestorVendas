@@ -1,31 +1,34 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useRef } from 'react';
 import {
-  Calendar,
-  Clock,
-  Filter,
   Search,
+  Filter,
   X,
-  UserX,
-  HardDrive,
-  Trash2,
+  UserCheck,
+  Calendar,
+  Download,
+  Clock,
   Upload,
+  Layers,
 } from 'lucide-react';
 import {
   FiltroTipo,
   FiltroStatusResponsavel,
   FiltroTurno,
-  FILTRO_TURNO_OPCOES,
+  FiltroSubItem,
 } from '../types/venda';
-import { compareDatesChronologically } from '../utils/formatters';
+import { getTodayLocalISO } from '../utils/formatters';
 
 interface TableToolbarProps {
-  availableDays: string[];
-  selectedDay: string;
-  onSelectDay: (day: string) => void;
+  startDate: string;
+  onStartDateChange: (date: string) => void;
+  endDate: string;
+  onEndDateChange: (date: string) => void;
   selectedTurno: FiltroTurno;
   onSelectTurno: (turno: FiltroTurno) => void;
   selectedTipo: FiltroTipo;
   onSelectTipo: (tipo: FiltroTipo) => void;
+  selectedSubItem: FiltroSubItem;
+  onSelectSubItem: (subItem: FiltroSubItem) => void;
   searchTerm: string;
   onSearchChange: (term: string) => void;
   statusResponsavel: FiltroStatusResponsavel;
@@ -36,23 +39,26 @@ interface TableToolbarProps {
   hasActiveFilters: boolean;
   onOpenQuickAssign: () => void;
   pendingAssignCount: number;
-  onOpenBackupModal?: () => void;
+  onOpenBackupModal: () => void;
   onImportBackupJSON?: (file: File) => void;
-  onDeleteFilteredVendas?: () => void;
 }
 
 export const TableToolbar: React.FC<TableToolbarProps> = ({
-  availableDays,
-  selectedDay,
-  onSelectDay,
+  startDate,
+  onStartDateChange,
+  endDate,
+  onEndDateChange,
   selectedTurno,
   onSelectTurno,
   selectedTipo,
   onSelectTipo,
+  selectedSubItem,
+  onSelectSubItem,
   searchTerm,
   onSearchChange,
   statusResponsavel,
   onSelectStatusResponsavel,
+  totalCount,
   filteredCount,
   onClearFilters,
   hasActiveFilters,
@@ -60,61 +66,200 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
   pendingAssignCount,
   onOpenBackupModal,
   onImportBackupJSON,
-  onDeleteFilteredVendas,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Garante ordenação cronológica real (mês menor -> dia menor) antes de renderizar no <select>
-  const sortedDays = useMemo(() => {
-    return [...availableDays].sort(compareDatesChronologically);
-  }, [availableDays]);
+  // Opções em cascata do Sub-filtro de "Item Específico" conforme Categoria selecionada
+  const subItemOptions = React.useMemo(() => {
+    if (selectedTipo === 'Boliche') {
+      return [
+        { value: 'Meia Hora' as FiltroSubItem, label: 'Meia Hora' },
+        { value: 'Uma Hora' as FiltroSubItem, label: 'Uma Hora' },
+        { value: 'Voucher' as FiltroSubItem, label: '🎟️ Voucher' },
+      ];
+    }
+    if (selectedTipo === 'Fichas') {
+      return [
+        { value: 'Avulsa/Eletrônica' as FiltroSubItem, label: 'Avulsa/Eletrônica' },
+        { value: 'Mini Combo' as FiltroSubItem, label: 'Mini Combo' },
+        { value: 'Big Combo' as FiltroSubItem, label: 'Big Combo' },
+        { value: 'Mega Combo' as FiltroSubItem, label: 'Mega Combo' },
+        { value: 'Manutenção' as FiltroSubItem, label: 'Manutenção' },
+        { value: 'Cortesia' as FiltroSubItem, label: 'Cortesia' },
+        { value: 'Voucher' as FiltroSubItem, label: '🎟️ Voucher' },
+      ];
+    }
+    if (selectedTipo === 'AeB') {
+      return [
+        { value: 'Cortesia' as FiltroSubItem, label: 'Cortesia' },
+        { value: 'Voucher' as FiltroSubItem, label: '🎟️ Voucher' },
+      ];
+    }
+    // Quando "Todos os Tipos" estiver selecionado, disponibiliza todas as opções
+    return [
+      { value: 'Meia Hora' as FiltroSubItem, label: 'Boliche: Meia Hora' },
+      { value: 'Uma Hora' as FiltroSubItem, label: 'Boliche: Uma Hora' },
+      { value: 'Avulsa/Eletrônica' as FiltroSubItem, label: 'Fichas: Avulsa/Eletrônica' },
+      { value: 'Mini Combo' as FiltroSubItem, label: 'Fichas: Mini Combo' },
+      { value: 'Big Combo' as FiltroSubItem, label: 'Fichas: Big Combo' },
+      { value: 'Mega Combo' as FiltroSubItem, label: 'Fichas: Mega Combo' },
+      { value: 'Manutenção' as FiltroSubItem, label: 'Fichas: Manutenção' },
+      { value: 'Cortesia' as FiltroSubItem, label: 'Cortesia (Todos)' },
+      { value: 'Voucher' as FiltroSubItem, label: '🎟️ Voucher (Todos)' },
+    ];
+  }, [selectedTipo]);
+
+  const todayISO = getTodayLocalISO();
+  const isAllDates = !startDate && !endDate;
+  const isTodaySelected = startDate === todayISO && endDate === todayISO;
 
   return (
-    <div className="bg-white border border-neutral-200/90 rounded-t-xl p-4 sm:p-5 border-b-0 space-y-3.5">
+    <div className="bg-white rounded-t-xl border border-b-0 border-neutral-200/80 p-4 space-y-3">
+      {/* Row 1: Primary Filters (Date Range, Turno, Search & Backup Actions) */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        {/* Left Side: Section heading & counts */}
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-neutral-900 tracking-tight">
-              Relatório Detalhado de Comandas
-            </h2>
-            <span className="text-xs font-mono-tabular px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-600 border border-neutral-200/60 font-medium">
-              {filteredCount} {filteredCount === 1 ? 'registro' : 'registros'}
-            </span>
+        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5 flex-1 flex-wrap">
+          {/* 1. Calendário de Período (Date Range): Data Inicial e Data Final */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 bg-neutral-50 border border-neutral-200/90 rounded-lg p-1.5">
+            <div className="flex items-center gap-1.5 px-1.5 text-xs font-semibold text-neutral-600">
+              <Calendar className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+              <span>Período:</span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5">
+              <div className="flex items-center gap-1">
+                <label
+                  htmlFor="comandas-start-date"
+                  className="text-[11px] font-medium text-neutral-500 whitespace-nowrap pl-1"
+                >
+                  De:
+                </label>
+                <input
+                  id="comandas-start-date"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => onStartDateChange(e.target.value)}
+                  aria-label="Data Inicial"
+                  className="w-full sm:w-auto bg-white border border-neutral-200 text-neutral-900 text-xs font-medium rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-400 transition-all"
+                />
+              </div>
+
+              <div className="flex items-center gap-1">
+                <label
+                  htmlFor="comandas-end-date"
+                  className="text-[11px] font-medium text-neutral-500 whitespace-nowrap pl-1"
+                >
+                  Até:
+                </label>
+                <input
+                  id="comandas-end-date"
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => onEndDateChange(e.target.value)}
+                  aria-label="Data Final"
+                  className="w-full sm:w-auto bg-white border border-neutral-200 text-neutral-900 text-xs font-medium rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-400 transition-all"
+                />
+              </div>
+
+              {/* Atalhos Rápidos: Hoje / Todas as Datas */}
+              <div className="flex items-center gap-1 pt-1 sm:pt-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const today = getTodayLocalISO();
+                    onStartDateChange(today);
+                    onEndDateChange(today);
+                  }}
+                  title="Filtrar apenas vendas de hoje"
+                  className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors cursor-pointer ${
+                    isTodaySelected
+                      ? 'bg-neutral-900 text-white'
+                      : 'bg-white hover:bg-neutral-100 text-neutral-600 border border-neutral-200'
+                  }`}
+                >
+                  Hoje
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onStartDateChange('');
+                    onEndDateChange('');
+                  }}
+                  title="Exibir registros de todas as datas"
+                  className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors cursor-pointer ${
+                    isAllDates
+                      ? 'bg-neutral-900 text-white'
+                      : 'bg-white hover:bg-neutral-100 text-neutral-600 border border-neutral-200'
+                  }`}
+                >
+                  Todas
+                </button>
+              </div>
+            </div>
           </div>
-          <p className="text-xs text-neutral-500 mt-0.5">
-            Visualize vendas, filtre por data, turno e categoria e edite os operadores diretamente na tabela.
-          </p>
+
+          {/* 2. Filtro de Turno Oficial (Manhã: 09:00 às 15:59 | Noite: 16:00 às 23:00) */}
+          <div className="relative w-full md:w-auto md:min-w-[215px]">
+            <Clock className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <select
+              value={selectedTurno}
+              onChange={(e) => onSelectTurno(e.target.value as FiltroTurno)}
+              aria-label="Filtrar por turno"
+              className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm font-medium bg-neutral-50 border border-neutral-200 rounded-lg text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-400 transition-all cursor-pointer"
+            >
+              <option value="Todos os Turnos">Todos os Turnos</option>
+              <option value="Manhã (09:00 às 15:59)">Manhã (09:00 às 15:59)</option>
+              <option value="Noite (16:00 às 23:00)">
+                Noite (16:00 às 23:00)
+              </option>
+            </select>
+          </div>
+
+          {/* 3. Campo de Busca Textual */}
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Buscar por comanda, item ou responsável..."
+              className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm bg-neutral-50 border border-neutral-200 rounded-lg text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-400 transition-all"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => onSearchChange('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Right Side: Quick actions */}
-        <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+        {/* Quick Actions: Atribuir Caixa, Backup (JSON) e Importar Backup */}
+        <div className="flex flex-wrap items-center gap-2">
           {pendingAssignCount > 0 && (
             <button
               type="button"
               onClick={onOpenQuickAssign}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-900 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100/80 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-amber-800 bg-amber-50 hover:bg-amber-100/80 border border-amber-200/80 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
             >
-              <UserX className="w-3.5 h-3.5 text-amber-600" />
-              <span>
-                {pendingAssignCount} {pendingAssignCount === 1 ? 'pendente' : 'pendentes'} · Atribuir em lote
-              </span>
+              <UserCheck className="w-3.5 h-3.5 text-amber-600" />
+              <span>Atribuir Caixa ({pendingAssignCount} sem nome)</span>
             </button>
           )}
 
-          {onOpenBackupModal && (
-            <button
-              type="button"
-              onClick={onOpenBackupModal}
-              title="Salvar ou restaurar cópia de segurança completa em JSON"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 border border-neutral-200 rounded-lg transition-colors cursor-pointer"
-            >
-              <HardDrive className="w-3.5 h-3.5 text-neutral-600" />
-              <span>Backup (JSON)</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onOpenBackupModal}
+            title="Fazer download de backup ou restaurar dados salvos"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200/70 border border-neutral-200/80 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5 text-neutral-500" />
+            <span>Backup (JSON)</span>
+          </button>
 
-          {/* Importar Backup (Sincronização Manual) */}
+          {/* Botão Importar Backup */}
           {onImportBackupJSON && (
             <>
               <input
@@ -133,238 +278,99 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                title="Importar arquivo .json para sincronizar o caixa do PC para o celular"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
+                title="Selecionar arquivo .json de backup para sincronizar dados"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
               >
                 <Upload className="w-3.5 h-3.5 text-emerald-600" />
                 <span>Importar Backup</span>
               </button>
             </>
           )}
-
-          {onDeleteFilteredVendas && (
-            <button
-              type="button"
-              disabled={filteredCount === 0}
-              onClick={onDeleteFilteredVendas}
-              title="Excluir do banco local apenas as vendas exibidas neste filtro atual"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100/90 active:bg-red-200/80 border border-red-200/90 rounded-lg transition-colors disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-red-600" />
-              <span>Apagar Vendas Filtradas</span>
-            </button>
-          )}
         </div>
       </div>
 
-      {/* Filter Controls Row: Empilhado no celular (flex-col) e lado a lado no desktop (md:flex-row) */}
-      <div className="flex flex-col md:flex-row md:items-center md:flex-wrap lg:flex-nowrap gap-2.5 pt-1 w-full">
-        {/* Search Input */}
-        <div className="w-full md:flex-1 min-w-[180px] relative">
-          <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Buscar item, comanda ou operador..."
-            className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all"
-          />
-          {searchTerm && (
-            <button
-              type="button"
-              onClick={() => onSearchChange('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 p-0.5 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-
-        {/* Filter by Day (Select) - Ordenado Cronologicamente */}
-        <div className="w-full md:w-auto md:min-w-[140px] relative">
-          <div className="relative">
-            <label htmlFor="filter-day" className="sr-only">
-              Filtrar por Dia
-            </label>
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
-              <Calendar className="w-4 h-4" />
-            </div>
-            <select
-              id="filter-day"
-              value={selectedDay}
-              onChange={(e) => onSelectDay(e.target.value)}
-              className="w-full pl-9 pr-7 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
-            >
-              <option value="Todos">Todos os Dias ({sortedDays.length})</option>
-              {sortedDays.map((day) => (
-                <option key={day} value={day}>
-                  Dia {day}
-                </option>
-              ))}
-            </select>
-            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
+      {/* Row 2: Secondary Filters (Categoria, Sub-filtro Item Específico em Cascata, Status Responsável & Contadores) */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 pt-2 border-t border-neutral-100">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 text-xs text-neutral-500 mr-1">
+            <Filter className="w-3.5 h-3.5" />
+            <span>Refinar:</span>
           </div>
-        </div>
 
-        {/* Filter by Turno (Select) - Ao lado do filtro de Datas */}
-        <div className="w-full md:w-auto md:min-w-[170px] relative">
-          <div className="relative">
-            <label htmlFor="filter-turno" className="sr-only">
-              Turno
-            </label>
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
-              <Clock className="w-4 h-4" />
-            </div>
-            <select
-              id="filter-turno"
-              aria-label="Turno"
-              value={selectedTurno}
-              onChange={(e) => onSelectTurno(e.target.value as FiltroTurno)}
-              className="w-full pl-9 pr-7 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
-            >
-              {FILTRO_TURNO_OPCOES.map((turnoOpt) => (
-                <option key={turnoOpt} value={turnoOpt}>
-                  {turnoOpt}
-                </option>
-              ))}
-            </select>
-            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          </div>
-        </div>
-
-        {/* Filter by Tipo de Venda (Select) */}
-        <div className="w-full md:w-auto md:min-w-[130px] relative">
-          <div className="relative">
-            <label htmlFor="filter-tipo" className="sr-only">
-              Filtrar por Tipo de Venda
-            </label>
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
-              <Filter className="w-4 h-4" />
-            </div>
-            <select
-              id="filter-tipo"
-              value={selectedTipo}
-              onChange={(e) => onSelectTipo(e.target.value as FiltroTipo)}
-              className="w-full pl-9 pr-7 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
-            >
-              <option value="Todos">Todos os Tipos</option>
-              <option value="Boliche">Boliche</option>
-              <option value="Fichas">Fichas</option>
-            </select>
-            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          </div>
-        </div>
-
-        {/* Filter by Responsible Status */}
-        <div className="w-full md:w-auto md:min-w-[160px] relative">
-          <div className="relative">
-            <label htmlFor="filter-status-responsavel" className="sr-only">
-              Status do Responsável
-            </label>
-            <select
-              id="filter-status-responsavel"
-              value={statusResponsavel}
-              onChange={(e) => onSelectStatusResponsavel(e.target.value as FiltroStatusResponsavel)}
-              className="w-full px-3 pr-7 py-2 text-xs sm:text-sm bg-neutral-50/70 border border-neutral-200 rounded-lg text-neutral-800 appearance-none focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-900 focus:bg-white transition-all cursor-pointer font-medium"
-            >
-              <option value="todos">Responsável: Todos</option>
-              <option value="pendentes">Sem Responsável</option>
-              <option value="preenchidos">Com Responsável</option>
-            </select>
-            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Active filters badge / clear indicator */}
-      {hasActiveFilters && (
-        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-neutral-100 text-xs">
-          <span className="text-neutral-500 font-medium">Filtros aplicados:</span>
-          {selectedDay !== 'Todos' && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-100 text-neutral-800 border border-neutral-200/80">
-              Dia: {selectedDay}
-              <button
-                type="button"
-                onClick={() => onSelectDay('Todos')}
-                className="hover:text-neutral-950 p-0.5 cursor-pointer"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </span>
-          )}
-          {selectedTurno !== 'Todos os Turnos' && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-100 text-neutral-800 border border-neutral-200/80">
-              Turno: {selectedTurno}
-              <button
-                type="button"
-                onClick={() => onSelectTurno('Todos os Turnos')}
-                className="hover:text-neutral-950 p-0.5 cursor-pointer"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </span>
-          )}
-          {selectedTipo !== 'Todos' && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-100 text-neutral-800 border border-neutral-200/80">
-              Tipo: {selectedTipo}
-              <button
-                type="button"
-                onClick={() => onSelectTipo('Todos')}
-                className="hover:text-neutral-950 p-0.5 cursor-pointer"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </span>
-          )}
-          {statusResponsavel !== 'todos' && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-100 text-neutral-800 border border-neutral-200/80">
-              {statusResponsavel === 'pendentes' ? 'Sem Responsável' : 'Com Responsável'}
-              <button
-                type="button"
-                onClick={() => onSelectStatusResponsavel('todos')}
-                className="hover:text-neutral-950 p-0.5 cursor-pointer"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </span>
-          )}
-          {searchTerm && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-100 text-neutral-800 border border-neutral-200/80">
-              Busca: &ldquo;{searchTerm}&rdquo;
-              <button
-                type="button"
-                onClick={() => onSearchChange('')}
-                className="hover:text-neutral-950 p-0.5 cursor-pointer"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={onClearFilters}
-            className="text-neutral-500 hover:text-neutral-900 underline font-medium ml-1 cursor-pointer"
+          {/* 2. Filtro Principal de Categoria ("Todos os Tipos", "Boliche", "Fichas", "AeB") */}
+          <select
+            value={selectedTipo}
+            onChange={(e) => {
+              const newTipo = e.target.value as FiltroTipo;
+              onSelectTipo(newTipo);
+              onSelectSubItem('Todos');
+            }}
+            aria-label="Filtrar por Categoria"
+            className="w-full md:w-auto px-2.5 py-1.5 text-xs font-medium bg-neutral-50 border border-neutral-200 rounded-md text-neutral-700 focus:outline-none focus:border-neutral-400 cursor-pointer"
           >
-            Limpar todos os filtros
-          </button>
+            <option value="Todos">Todos os Tipos</option>
+            <option value="Boliche">Boliche</option>
+            <option value="Fichas">Fichas</option>
+            <option value="AeB">AeB</option>
+          </select>
+
+          {/* 2. Sub-filtro em Cascata: "Item Específico" */}
+          <div className="relative w-full md:w-auto">
+            <Layers className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <select
+              value={selectedSubItem}
+              onChange={(e) => onSelectSubItem(e.target.value as FiltroSubItem)}
+              aria-label="Filtrar por Item Específico"
+              className="w-full md:w-auto pl-7 pr-6 py-1.5 text-xs font-medium bg-neutral-50 border border-neutral-200 rounded-md text-neutral-700 focus:outline-none focus:border-neutral-400 cursor-pointer"
+            >
+              <option value="Todos">
+                {selectedTipo === 'Boliche'
+                  ? 'Item Específico (Todos Boliche)'
+                  : selectedTipo === 'Fichas'
+                  ? 'Item Específico (Todas Fichas)'
+                  : selectedTipo === 'AeB'
+                  ? 'Item Específico (Todos AeB)'
+                  : 'Item Específico (Todos)'}
+              </option>
+              {subItemOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Filtro por Status do Responsável */}
+          <select
+            value={statusResponsavel}
+            onChange={(e) =>
+              onSelectStatusResponsavel(e.target.value as FiltroStatusResponsavel)
+            }
+            aria-label="Filtrar por preenchimento do responsável"
+            className="w-full md:w-auto px-2.5 py-1.5 text-xs font-medium bg-neutral-50 border border-neutral-200 rounded-md text-neutral-700 focus:outline-none focus:border-neutral-400 cursor-pointer"
+          >
+            <option value="todos">Todos os Responsáveis</option>
+            <option value="pendentes">Sem Responsável (Pendentes)</option>
+            <option value="preenchidos">Com Responsável Preenchido</option>
+          </select>
+
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={onClearFilters}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 bg-neutral-100 hover:bg-neutral-200/70 rounded-md transition-colors cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+              <span>Limpar filtros</span>
+            </button>
+          )}
         </div>
-      )}
+
+        <div className="text-xs text-neutral-500 font-mono-tabular">
+          Mostrando <strong className="text-neutral-900">{filteredCount}</strong> de{' '}
+          <strong className="text-neutral-900">{totalCount}</strong> registros
+        </div>
+      </div>
     </div>
   );
 };

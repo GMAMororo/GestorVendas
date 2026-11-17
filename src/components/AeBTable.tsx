@@ -1,477 +1,270 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  Check,
-  User,
+  UtensilsCrossed,
   Trash2,
-  Copy,
-  CheckCheck,
-  Lock,
+  User,
+  Clock,
+  Calendar,
+  Inbox,
   Pencil,
-  GlassWater,
+  Ban,
+  Gift,
+  CalendarRange,
 } from 'lucide-react';
 import { VendaAeB } from '../types/venda';
-import { formatCurrencyBRL, compareDateTimeChronologically } from '../utils/formatters';
+import {
+  formatCurrencyBRL,
+  isRegistroCortesia,
+  isRegistroConta3000,
+  getContaAdmCode,
+  isRegistroVoucher,
+  getValorMonetarioEfetivo,
+} from '../utils/formatters';
 
 interface AeBTableProps {
   vendas: VendaAeB[];
-  onUpdateResponsavel: (id: string, responsavel: string) => void;
-  onEditVenda?: (venda: VendaAeB) => void;
-  onDeleteVenda?: (id: string) => void;
+  totalDatabaseCount?: number;
+  onExpandAllDates?: () => void;
+  onResponsavelChange: (id: string, novoResponsavel: string) => void;
+  onEditVenda: (venda: VendaAeB) => void;
+  onDeleteVenda: (id: string) => void;
 }
-
-type SortField = 'data_hora' | 'item' | 'preco' | 'responsavel';
-type SortDirection = 'asc' | 'desc';
 
 export const AeBTable: React.FC<AeBTableProps> = ({
   vendas,
-  onUpdateResponsavel,
+  totalDatabaseCount = 0,
+  onExpandAllDates,
+  onResponsavelChange,
   onEditVenda,
   onDeleteVenda,
 }) => {
-  const [sortField, setSortField] = useState<SortField>('data_hora');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [savedRowId, setSavedRowId] = useState<string | null>(null);
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortField(field);
-      setSortDirection('asc');
-    }
-  };
-
-  const handleCopyId = (id: string) => {
-    navigator.clipboard.writeText(id);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const handleResponsavelChange = (id: string, value: string) => {
-    onUpdateResponsavel(id, value);
-    setSavedRowId(id);
-    setTimeout(() => {
-      setSavedRowId((current) => (current === id ? null : current));
-    }, 1500);
-  };
-
-  const sortedVendas = [...vendas].sort((a, b) => {
-    let comparison = 0;
-
-    switch (sortField) {
-      case 'data_hora': {
-        comparison = compareDateTimeChronologically(a, b);
-        break;
-      }
-      case 'item':
-        comparison = a.item.localeCompare(b.item);
-        break;
-      case 'preco':
-        comparison = a.preco - b.preco;
-        break;
-      case 'responsavel':
-        comparison = (a.responsavel || '').localeCompare(b.responsavel || '');
-        break;
-    }
-
-    return sortDirection === 'asc' ? comparison : -comparison;
-  });
-
-  const renderSortIcon = (field: SortField) => {
-    if (sortField !== field) {
-      return <ArrowUpDown className="w-3.5 h-3.5 text-neutral-400 group-hover:text-neutral-600 transition-colors" />;
-    }
-    return sortDirection === 'asc' ? (
-      <ArrowUp className="w-3.5 h-3.5 text-neutral-900" />
-    ) : (
-      <ArrowDown className="w-3.5 h-3.5 text-neutral-900" />
+  if (vendas.length === 0) {
+    return (
+      <div className="bg-slate-900/90 border border-slate-800/90 rounded-xl p-12 text-center shadow-lg">
+        <div className="w-14 h-14 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center mx-auto mb-4 text-slate-400">
+          <Inbox className="w-7 h-7" />
+        </div>
+        <h3 className="text-base font-semibold text-slate-200">
+          Nenhuma comanda de Alimentos e Bebidas encontrada
+        </h3>
+        <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+          Importe um relatório PDF de AeB do sistema Volux, ajuste o período de datas acima ou
+          registre uma venda manual pelo Catálogo Oficial.
+        </p>
+        {totalDatabaseCount > 0 && onExpandAllDates && (
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={onExpandAllDates}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-orange-500/15 hover:bg-orange-500/25 text-orange-300 border border-orange-500/40 transition-colors cursor-pointer"
+            >
+              <CalendarRange className="w-4 h-4" />
+              <span>
+                Exibir todas as datas ({totalDatabaseCount} registros AeB no banco)
+              </span>
+            </button>
+          </div>
+        )}
+      </div>
     );
-  };
+  }
+
+  const totalAtivasPagas = vendas
+    .filter((v) => !v.cancelado && v.status !== 'Cancelado')
+    .reduce((acc, curr) => acc + getValorMonetarioEfetivo(curr), 0);
 
   return (
-    <div className="bg-white border border-neutral-200/90 rounded-b-xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-      {/* Empty State */}
-      {sortedVendas.length === 0 ? (
-        <div className="py-16 px-4 text-center">
-          <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 mx-auto flex items-center justify-center mb-3">
-            <GlassWater className="w-6 h-6" />
-          </div>
-          <h3 className="text-sm font-semibold text-neutral-900">
-            Nenhum item de Alimentos e Bebidas (AeB) registrado
-          </h3>
-          <p className="text-xs text-neutral-500 max-w-md mx-auto mt-1 leading-relaxed">
-            Seu módulo de AeB está pronto para uso real. Importe o relatório Volux AeB (PDF) acima ou clique no botão <strong className="font-semibold text-neutral-700">Nova Venda (AeB)</strong>.
-          </p>
-        </div>
-      ) : (
-        <>
-          {/* Tabela de Alimentos e Bebidas com Rolagem Horizontal para Mobile (overflow-x-auto) */}
-          <div className="overflow-x-auto w-full scroll-smooth">
-            <div className="md:hidden px-4 py-2 bg-neutral-50/90 border-b border-neutral-200/80 text-[11px] text-neutral-600 flex items-center justify-between">
-              <span>👉 Deslize para o lado para ver todas as colunas</span>
-              <span className="font-mono-tabular font-medium">{sortedVendas.length} itens</span>
-            </div>
-            <table className="w-full min-w-[720px] text-left text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-neutral-200 bg-neutral-50/75 text-xs font-semibold text-neutral-600 tracking-tight">
-                  <th scope="col" className="py-3 px-4 w-[140px]">
-                    <button
-                      type="button"
-                      onClick={() => handleSort('data_hora')}
-                      className="group inline-flex items-center gap-1.5 hover:text-neutral-900 transition-colors cursor-pointer"
-                    >
-                      <span>Data / Hora</span>
-                      {renderSortIcon('data_hora')}
-                    </button>
-                  </th>
-                  <th scope="col" className="py-3 px-4 min-w-[240px]">
-                    <button
-                      type="button"
-                      onClick={() => handleSort('item')}
-                      className="group inline-flex items-center gap-1.5 hover:text-neutral-900 transition-colors cursor-pointer"
-                    >
-                      <span>Item / Alimentos e Bebidas</span>
-                      {renderSortIcon('item')}
-                    </button>
-                  </th>
-                  <th scope="col" className="py-3 px-4 text-right w-[150px]">
-                    <button
-                      type="button"
-                      onClick={() => handleSort('preco')}
-                      title="Preço lido no relatório Volux (Imutável conforme Regra de Ouro)"
-                      className="group inline-flex items-center gap-1.5 justify-end w-full hover:text-neutral-900 transition-colors cursor-pointer"
-                    >
-                      <Lock className="w-3 h-3 text-neutral-400" />
-                      <span>Preço Total</span>
-                      {renderSortIcon('preco')}
-                    </button>
-                  </th>
-                  <th scope="col" className="py-3 px-4 min-w-[220px]">
-                    <button
-                      type="button"
-                      onClick={() => handleSort('responsavel')}
-                      className="group inline-flex items-center gap-1.5 hover:text-neutral-900 transition-colors cursor-pointer"
-                    >
-                      <span>Responsável (Operador)</span>
-                      {renderSortIcon('responsavel')}
-                    </button>
-                  </th>
-                  <th scope="col" className="py-3 px-4 text-right w-[150px]">
-                    <span className="font-semibold text-neutral-600">Ações</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-100">
-                {sortedVendas.map((venda) => {
-                  const isCancelado = Boolean(venda.cancelado || venda.status === 'Cancelado');
-                  const hasResponsavel = venda.responsavel && venda.responsavel.trim().length > 0;
-                  const justSaved = savedRowId === venda.id;
-                  const precoExibido = isCancelado ? 0 : venda.preco;
-
-                  return (
-                    <tr
-                      key={venda.id}
-                      className={`transition-colors group ${
-                        isCancelado
-                          ? 'bg-red-50/25 hover:bg-red-50/40 opacity-75'
-                          : 'hover:bg-neutral-50/80'
-                      }`}
-                    >
-                      {/* Data & Hora */}
-                      <td className="py-3.5 px-4 whitespace-nowrap align-middle">
-                        <div className={`flex flex-col ${isCancelado ? 'line-through decoration-red-400/70 opacity-75' : ''}`}>
-                          <span className="font-semibold text-neutral-900 font-mono-tabular text-xs">
-                            {venda.data}
-                          </span>
-                          <span className="text-neutral-500 font-mono-tabular text-xs">
-                            às {venda.hora}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Item Bebida & Comanda ID */}
-                      <td className="py-3.5 px-4 align-middle">
-                        <div className="flex items-center gap-2.5">
-                          <div
-                            className={`w-7 h-7 rounded-md bg-blue-50 text-blue-700 flex items-center justify-center shrink-0 border border-blue-200/60 ${
-                              isCancelado ? 'opacity-60' : ''
-                            }`}
-                          >
-                            <GlassWater className="w-3.5 h-3.5" />
-                          </div>
-                          <div className="flex flex-col">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span
-                                className={`font-semibold ${
-                                  isCancelado
-                                    ? 'text-neutral-500 line-through decoration-red-500/80'
-                                    : 'text-neutral-900'
-                                }`}
-                              >
-                                {venda.item}
-                              </span>
-                              {isCancelado && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-red-100 text-red-800 border border-red-300 shadow-2xs">
-                                  Cancelado no Volux
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1 text-[11px] text-neutral-400 font-mono-tabular mt-0.5">
-                              <span className={isCancelado ? 'line-through' : ''}>
-                                Comanda #{venda.comanda || venda.id}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleCopyId(venda.comanda || venda.id)}
-                                title="Copiar código da comanda"
-                                className="opacity-0 group-hover:opacity-100 text-neutral-400 hover:text-neutral-700 transition-opacity p-0.5 cursor-pointer"
-                              >
-                                {copiedId === (venda.comanda || venda.id) ? (
-                                  <CheckCheck className="w-3 h-3 text-emerald-600" />
-                                ) : (
-                                  <Copy className="w-3 h-3" />
-                                )}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Preço (Imutável conforme Regra de Ouro) */}
-                      <td className="py-3.5 px-4 whitespace-nowrap text-right align-middle">
-                        <div className="flex flex-col items-end">
-                          <span
-                            className={`font-semibold font-mono-tabular text-sm ${
-                              isCancelado ? 'text-red-700' : 'text-neutral-900'
-                            }`}
-                          >
-                            {formatCurrencyBRL(precoExibido)}
-                          </span>
-                          {isCancelado && (
-                            <span className="text-[10px] font-medium text-red-600">
-                              Anulado (R$ 0,00)
-                            </span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Responsável (Input interativo em tempo real) */}
-                      <td className="py-3 px-4 align-middle">
-                        <div className="relative flex items-center">
-                          <input
-                            type="text"
-                            value={venda.responsavel}
-                            onChange={(e) =>
-                              handleResponsavelChange(venda.id, e.target.value)
-                            }
-                            placeholder="Digitar operador..."
-                            aria-label={`Responsável pela bebida comanda ${venda.id}`}
-                            className={`w-full py-1.5 pl-3 pr-8 text-xs sm:text-sm rounded-lg border transition-all ${
-                              hasResponsavel
-                                ? 'bg-white border-neutral-300 text-neutral-900 focus:border-neutral-900 focus:ring-2 focus:ring-neutral-900/10'
-                                : 'bg-neutral-50/70 border-neutral-200 text-neutral-700 placeholder:text-neutral-400 focus:bg-white focus:border-neutral-900 focus:ring-2 focus:ring-neutral-900/10'
-                            }`}
-                          />
-                          <div className="absolute right-2.5 flex items-center pointer-events-none">
-                            {justSaved ? (
-                              <span
-                                title="Salvo em tempo real"
-                                className="text-emerald-600 animate-pulse flex items-center"
-                              >
-                                <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                              </span>
-                            ) : hasResponsavel ? (
-                              <span
-                                title="Operador atribuído"
-                                className="text-neutral-400"
-                              >
-                                <Check className="w-3 h-3" />
-                              </span>
-                            ) : (
-                              <User className="w-3 h-3 text-neutral-300" />
-                            )}
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Ações: Editar e Excluir */}
-                      <td className="py-3.5 px-4 text-right align-middle whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {isCancelado && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-red-50 text-red-700 border border-red-200">
-                              Cancelado no Volux
-                            </span>
-                          )}
-                          {onEditVenda && (
-                            <button
-                              type="button"
-                              onClick={() => onEditVenda(venda)}
-                              title="Editar venda de bebida"
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200/90 active:bg-neutral-200 rounded-md border border-neutral-200/80 transition-colors cursor-pointer"
-                            >
-                              <Pencil className="w-3 h-3 text-neutral-600" />
-                              <span>Editar</span>
-                            </button>
-                          )}
-                          {onDeleteVenda && (
-                            <button
-                              type="button"
-                              onClick={() => onDeleteVenda(venda.id)}
-                              title="Excluir lançamento de bebida"
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100/90 active:bg-red-200 rounded-md border border-red-200 transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 text-red-600" />
-                              <span>Excluir</span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Mobile Card List View - Ocultado em favor da tabela rolável horizontal */}
-          <div className="hidden">
-            {sortedVendas.map((venda) => {
-              const isCancelado = Boolean(venda.cancelado);
-              const hasResponsavel = venda.responsavel && venda.responsavel.trim().length > 0;
-              const justSaved = savedRowId === venda.id;
-              const precoExibido = isCancelado ? 0 : venda.preco;
+    <div className="bg-slate-900/90 border border-slate-800/90 rounded-xl overflow-hidden shadow-xl">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="bg-slate-950/90 border-b border-slate-800 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              <th className="py-3.5 px-3">
+                <div className="flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Data</span>
+                </div>
+              </th>
+              <th className="py-3.5 px-3">
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Hora</span>
+                </div>
+              </th>
+              <th className="py-3.5 px-4">Item (Produto AeB)</th>
+              <th className="py-3.5 px-4 text-right">Preço Unit.</th>
+              <th className="py-3.5 px-4 min-w-[210px]">
+                <div className="flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-orange-400" />
+                  <span>Garçom / Responsável</span>
+                </div>
+              </th>
+              <th className="py-3.5 px-4 text-center w-24">Ações</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/60 text-sm">
+            {vendas.map((venda, idx) => {
+              const numeroComandaExibicao = venda.comanda || venda.id;
+              const isCancelado = Boolean(venda.cancelado || venda.status === 'Cancelado');
+              const isCortesia = isRegistroCortesia(venda);
+              const contaAdmCode = getContaAdmCode(venda);
+              const isConta3000 = isRegistroConta3000(venda);
+              const isVoucher = isRegistroVoucher(venda);
+              const valorEfetivo = getValorMonetarioEfetivo(venda);
 
               return (
-                <div
-                  key={venda.id}
-                  className={`p-4 space-y-3 ${
-                    isCancelado ? 'bg-red-50/25 opacity-75' : 'bg-white'
+                <tr
+                  key={`${venda.id}-${idx}`}
+                  className={`transition-colors group ${
+                    isCancelado
+                      ? 'bg-rose-950/20 hover:bg-rose-950/30 opacity-65'
+                      : isCortesia
+                      ? 'bg-amber-950/10 hover:bg-amber-950/20'
+                      : 'hover:bg-slate-800/40'
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200/80 ${
-                            isCancelado ? 'line-through opacity-60' : ''
-                          }`}
-                        >
-                          <GlassWater className="w-3 h-3 text-blue-500" />
-                          AeB
-                        </span>
-                        {isCancelado && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-red-100 text-red-800 border border-red-300">
-                            Cancelado no Volux
-                          </span>
-                        )}
-                        <span
-                          className={`text-xs text-neutral-500 font-mono-tabular ${
-                            isCancelado ? 'line-through' : ''
-                          }`}
-                        >
-                          {venda.data} às {venda.hora}
-                        </span>
-                      </div>
-                      <h4
-                        className={`text-sm font-semibold pt-0.5 ${
-                          isCancelado
-                            ? 'text-neutral-500 line-through decoration-red-500/80'
-                            : 'text-neutral-900'
+                  {/* Data */}
+                  <td
+                    className={`py-3 px-3 text-xs whitespace-nowrap ${
+                      isCancelado ? 'text-rose-300/70 line-through' : 'text-slate-300'
+                    }`}
+                  >
+                    {venda.data}
+                  </td>
+
+                  {/* Hora */}
+                  <td
+                    className={`py-3 px-3 text-xs font-mono whitespace-nowrap ${
+                      isCancelado ? 'text-rose-300/70 line-through' : 'text-slate-400'
+                    }`}
+                  >
+                    {venda.hora}
+                  </td>
+
+                  {/* Item (Produto AeB) + Micro-badges */}
+                  <td className="py-3 px-4 font-medium">
+                    <div className="flex items-center gap-2 flex-nowrap">
+                      <span
+                        className={`inline-flex items-center justify-center w-6 h-6 rounded-md bg-orange-500/10 border border-orange-500/30 text-orange-400 shrink-0 ${
+                          isCancelado ? 'opacity-60' : ''
+                        }`}
+                      >
+                        <UtensilsCrossed className="w-3.5 h-3.5" />
+                      </span>
+                      <span
+                        title={`Comanda / ID Interno: #${numeroComandaExibicao}`}
+                        className={`whitespace-nowrap ${
+                          isCancelado ? 'text-rose-300/80 line-through' : 'text-slate-200'
                         }`}
                       >
                         {venda.item}
-                      </h4>
-                      <p
-                        className={`text-[11px] text-neutral-400 font-mono-tabular ${
-                          isCancelado ? 'line-through' : ''
-                        }`}
-                      >
-                        Comanda #{venda.comanda || venda.id}
-                      </p>
-                    </div>
-
-                    <div className="text-right shrink-0">
-                      <span
-                        className={`font-semibold font-mono-tabular text-base ${
-                          isCancelado ? 'text-red-700' : 'text-neutral-900'
-                        }`}
-                      >
-                        {formatCurrencyBRL(precoExibido)}
                       </span>
+                      {venda.faltouNoManual && !isCancelado && (
+                        <span
+                          title="Faltou no manual, adicionado via PDF"
+                          className="whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-semibold bg-amber-500/20 text-amber-200 border border-amber-500/40"
+                        >
+                          ⚠️ Só PDF
+                        </span>
+                      )}
+                      {contaAdmCode && !isCancelado && (
+                        <span
+                          title={`Conta ${contaAdmCode} (ADM = S)`}
+                          className="whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-200 border border-amber-500/40"
+                        >
+                          ADM {contaAdmCode}
+                        </span>
+                      )}
+                      {isVoucher && !isCancelado && (
+                        <span
+                          title="Pago com Voucher"
+                          className="whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-semibold bg-purple-500/20 text-purple-200 border border-purple-500/40"
+                        >
+                          🎟️ Voucher
+                        </span>
+                      )}
+                      {isCortesia && !isConta3000 && (
+                        <span className="whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 inline-flex items-center gap-1">
+                          <Gift className="w-3 h-3" />
+                          Cortesia
+                        </span>
+                      )}
+                      {isCancelado && (
+                        <span className="whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 inline-flex items-center gap-1">
+                          <Ban className="w-3 h-3" />
+                          Cancelado
+                        </span>
+                      )}
                     </div>
-                  </div>
+                  </td>
 
-                  {/* Operador Mobile */}
-                  <div className="pt-1">
-                    <label className="block text-[11px] font-medium text-neutral-500 mb-1">
-                      Responsável / Operador:
-                    </label>
-                    <div className="relative flex items-center">
-                      <input
-                        type="text"
-                        value={venda.responsavel}
-                        onChange={(e) =>
-                          handleResponsavelChange(venda.id, e.target.value)
-                        }
-                        placeholder="Digitar operador..."
-                        className={`w-full py-2 pl-3 pr-8 text-xs rounded-lg border transition-all ${
-                          hasResponsavel
-                            ? 'bg-white border-neutral-300 text-neutral-900 focus:border-neutral-900'
-                            : 'bg-neutral-50 border-neutral-200 text-neutral-700 placeholder:text-neutral-400 focus:bg-white focus:border-neutral-900'
-                        }`}
-                      />
-                      <div className="absolute right-2.5 pointer-events-none">
-                        {justSaved ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
-                        ) : hasResponsavel ? (
-                          <Check className="w-3 h-3 text-neutral-400" />
-                        ) : (
-                          <User className="w-3 h-3 text-neutral-300" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  {/* Preço */}
+                  <td className="py-3 px-4 text-right font-semibold whitespace-nowrap">
+                    {isCancelado ? (
+                      <span className="text-rose-400 line-through">
+                        {formatCurrencyBRL(0)}
+                      </span>
+                    ) : isCortesia ? (
+                      <span className="text-amber-300 font-mono">
+                        {formatCurrencyBRL(valorEfetivo)}
+                      </span>
+                    ) : (
+                      <span className="text-emerald-400">
+                        {formatCurrencyBRL(valorEfetivo)}
+                      </span>
+                    )}
+                  </td>
 
-                  {/* Ações Mobile */}
-                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-neutral-100">
-                    {onEditVenda && (
+                  {/* Responsável Input */}
+                  <td className="py-2.5 px-4">
+                    <input
+                      type="text"
+                      value={venda.responsavel}
+                      onChange={(e) => onResponsavelChange(venda.id, e.target.value)}
+                      placeholder="Digitar nome do garçom/caixa..."
+                      className={`w-full text-xs rounded-lg px-3 py-1.5 border transition-all focus:outline-none ${
+                        venda.responsavel.trim()
+                          ? 'bg-slate-950/90 border-slate-700/80 text-white font-medium focus:border-orange-500'
+                          : 'bg-slate-950/40 border-dashed border-slate-800 text-slate-400 placeholder-slate-600 focus:border-orange-500/60 focus:bg-slate-950'
+                      }`}
+                    />
+                  </td>
+
+                  {/* Ações: Editar e Excluir */}
+                  <td className="py-3 px-4 text-center">
+                    <div className="flex items-center justify-center gap-1">
                       <button
-                        type="button"
                         onClick={() => onEditVenda(venda)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg border border-neutral-200/80 transition-colors cursor-pointer"
+                        title="Editar venda AeB"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-orange-400 hover:bg-orange-500/10 transition-colors cursor-pointer"
                       >
-                        <Pencil className="w-3 h-3 text-neutral-600" />
-                        <span>Editar</span>
+                        <Pencil className="w-4 h-4" />
                       </button>
-                    )}
-                    {onDeleteVenda && (
                       <button
-                        type="button"
                         onClick={() => onDeleteVenda(venda.id)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg border border-red-200 transition-colors cursor-pointer"
+                        title="Remover registro AeB"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
                       >
-                        <Trash2 className="w-3 h-3 text-red-600" />
-                        <span>Excluir</span>
+                        <Trash2 className="w-4 h-4" />
                       </button>
-                    )}
-                  </div>
-                </div>
+                    </div>
+                  </td>
+                </tr>
               );
             })}
-          </div>
-        </>
-      )}
-
-      {/* Footer */}
-      <div className="px-4 py-3 bg-neutral-50/75 border-t border-neutral-200 text-xs text-neutral-500 flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>Preços lidos no relatório Volux são registrados de forma imutável.</span>
-        <div className="font-mono-tabular text-neutral-600 font-medium">
-          {sortedVendas.length} {sortedVendas.length === 1 ? 'bebida exibida' : 'bebidas exibidas'}
-        </div>
+          </tbody>
+          <tfoot>
+            <tr className="bg-slate-950/90 border-t border-slate-800 text-xs font-semibold text-slate-300">
+              <td colSpan={3} className="py-3.5 px-4 text-right uppercase tracking-wider text-slate-400">
+                Total Faturado AeB ({vendas.length} itens exibidos):
+              </td>
+              <td className="py-3.5 px-4 text-right text-sm font-bold text-emerald-400 whitespace-nowrap">
+                {formatCurrencyBRL(totalAtivasPagas)}
+              </td>
+              <td colSpan={2} />
+            </tr>
+          </tfoot>
+        </table>
       </div>
     </div>
   );
